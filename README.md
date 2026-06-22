@@ -1,5 +1,11 @@
 # vivijure-audio-upscale
 
+[![build-image](https://github.com/skyphusion-labs/vivijure-audio-upscale/actions/workflows/build-image.yml/badge.svg)](https://github.com/skyphusion-labs/vivijure-audio-upscale/actions/workflows/build-image.yml)
+
+> **Validated:** the image test-builds clean; the model loads and `enhance()` runs on CPU
+> (bandwidth-extends 16 kHz -> 44.1 kHz). The full GPU `{"selftest": true}` harness is endpoint-gated
+> (run once the RunPod endpoint is pinned -- a deliberate, spend-gated step).
+
 A RunPod serverless image that enhances **speech** audio on GPU with
 [resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (denoise -> restore ->
 bandwidth-extend). The CUDA half of Vivijure's audio finish path: it runs on a shot's **dialogue**
