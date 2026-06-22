@@ -4,14 +4,20 @@
 # per-shot dialogue track BEFORE MuseTalk so the lips sync to the cleaned audio. The transport contract
 # and the {"selftest": true} harness mirror vivijure-upscale.
 #
-# Base: RunPod's torch 2.1.1 / py3.10 / CUDA 12.1.1 image -- resemble-enhance hard-pins torch==2.1.1
-# (and py<3.12), so we base on its native stack rather than fight the newer torch-2.8 base used by
-# vivijure-upscale. torch + torchaudio come from the base; requirements pull resemble-enhance.
-FROM runpod/pytorch:2.1.1-py3.10-cuda12.1.1-devel-ubuntu22.04
+# Base: RunPod's torch 2.8 / CUDA 12.8.1 image (same as the sibling vivijure-upscale/musetalk images).
+# cu128/torch-2.8 ships Blackwell (sm_120) kernels, so the worker runs on ANY card RunPod substitutes
+# -- the older torch-2.1.1/cu121 build crash-looped when RunPod swapped our L4/L40S for a Blackwell
+# (sm_120) GPU (_cuda_init_check: no kernel image for the device). resemble-enhance pins torch==2.1.1
+# but we install it --no-deps (below), so the pin doesn't bind and its inference path runs on torch 2.8.
+FROM runpod/pytorch:1.0.2-cu1281-torch280-ubuntu2404
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Drop NVIDIA's CUDA apt source before `apt-get update`: we only need ffmpeg/git/git-lfs from the
+# standard Ubuntu repos, and NVIDIA's mirror periodically fails update mid-sync ("File has unexpected
+# size"). torch + CUDA are already baked into the base, so the cuda apt repo is unneeded here.
+RUN rm -f /etc/apt/sources.list.d/*cuda*.list /etc/apt/sources.list.d/*nvidia*.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg ca-certificates curl git git-lfs && \
     git lfs install --system && \
     rm -rf /var/lib/apt/lists/*
