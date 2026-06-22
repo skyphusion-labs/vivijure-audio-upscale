@@ -15,6 +15,52 @@ track **before** MuseTalk, so the lip-sync follows the cleaned audio and thin/au
 Speech only. Music / score beds go through the CPU `audio-mix` path (ffmpeg DSP "mastering"), not a
 neural model -- cost-aware routing: GPU only when there's speech.
 
+## Where it fits
+
+This module is the **speech** node of Vivijure's finish chain. Two things to read off the diagram:
+(1) it is **audio in, audio out** and runs **before** lip-sync, so MuseTalk drives the mouth from the
+*cleaned* dialogue; (2) **music / score beds bypass it entirely** and take the CPU `audio-mix` path
+-- the GPU only ever sees speech.
+
+```mermaid
+flowchart TD
+    KF[keyframe] --> CL["clips: image-to-video"]
+    CL --> DLG["dialogue: Aura-1 TTS"]
+
+    DLG -->|dialogue audio track| SPEECH
+
+    subgraph AUDIO ["audio finish, per shot"]
+      direction TB
+      SPEECH["speech: resemble-enhance<br/>(THIS MODULE, GPU)<br/>audio in, audio out"]
+      MUSIC["music / score beds"] -->|bypasses this module| MIX["audio-mix<br/>(CPU ffmpeg DSP)"]
+    end
+
+    SPEECH -->|cleaned dialogue| LS
+    SPEECH -->|cleaned dialogue| MIX
+
+    subgraph FINISH ["finish, video, per shot"]
+      direction TB
+      LS["MuseTalk lip-sync"] --> RIFE["RIFE interpolation"]
+      RIFE --> VUP["video-upscale / text-overlay"]
+    end
+
+    CL -->|face clip| LS
+    VUP --> ASM[assemble]
+    ASM --> MUX["mux: video + audio"]
+    MIX --> MUX
+    MUX --> DONE([done])
+
+    classDef this fill:#1f6feb,stroke:#0b3d91,color:#ffffff,stroke-width:3px;
+    classDef cpu fill:#2d333b,stroke:#768390,color:#ffffff,stroke-dasharray:5 3;
+    class SPEECH this;
+    class MUSIC,MIX cpu;
+```
+
+The video side of `finish` (MuseTalk lip-sync, then RIFE interpolation, then video-upscale /
+text-overlay) is its own chain of single-purpose GPU modules; see the siblings
+[`vivijure-musetalk`](https://github.com/skyphusion-labs/vivijure-musetalk) and
+[`vivijure-upscale`](https://github.com/skyphusion-labs/vivijure-upscale).
+
 ## Models
 
 resemble-enhance's checkpoints (the ResembleAI/resemble-enhance HF repo, ~713 MB) are baked into the
