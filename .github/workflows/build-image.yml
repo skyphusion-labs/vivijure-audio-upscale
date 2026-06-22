@@ -1,12 +1,38 @@
 name: build-image
 
-# RunPod serverless image build for vivijure-audio-upscale (CUDA speech enhancement).
-# Mirrors the musetalk/upscale builds: on a push to main that touches the image inputs,
-# build the Docker image and push it to GHCR as :latest + :<sha>. The endpoint template
-# is re-pinned to the new image separately (deliberate, spend-gated step).
+# ============================================================================
+# HEAVY-RUNNER VARIANT -- DO NOT MERGE until GitHub Enterprise is live.
+# ============================================================================
+# This is the GitHub-hosted LARGER-runner version of the fleet build, staged on
+# branch ci/heavy-runner-ready for next-week migration of the 3 GPU repos.
 #
-# Runner: the org self-hosted fleet pool (private repo, no outside PRs). GHCR auth uses the
-# built-in GITHUB_TOKEN (no PAT), scoped to packages: write for this workflow only.
+# Difference from main: `runs-on` moves OFF the org self-hosted fleet pool ONTO a
+# GitHub-hosted larger runner. That is fork-safe BY CONSTRUCTION -- a GitHub-hosted
+# runner is an ephemeral VM owned by GitHub, so even if a workflow ever did run for
+# an outside fork it could not touch our fleet, our network, or any persistent disk.
+# (We also keep ZERO pull_request triggers, so a fork PR still executes nothing.)
+#
+# PREREQUISITE (blocks this file from running): the label below must exist as an
+# org-level GitHub-hosted larger runner created under Enterprise
+# (Org -> Settings -> Actions -> Runners -> New GitHub-hosted runner). Until that
+# runner exists, a job targeting this label sits QUEUED forever and is never picked
+# up -- same failure shape as a dangling binding: typecheck/lint won't catch it,
+# only a real run will. Confirm the runner is live before merging to main.
+#
+# Sizing: ubuntu-22.04-4core = 4 vCPU / 16 GB RAM / 150 GB SSD. The 150 GB OS disk
+# is ample headroom for the ~8.79 GB final image plus the CUDA base + intermediate
+# layers (the self-hosted fleet build runs fine on far less), so NO host disk-reclaim
+# dance is needed here. We keep the docker prune + post-push image removal anyway for
+# parity with the fleet workflow and as cheap hygiene. Bump to ubuntu-22.04-8core
+# (8 vCPU / 32 GB / 300 GB SSD) ONLY if build wall-clock becomes the bottleneck; the
+# build is mostly base-image-pull and GHCR-push bound (network), so more cores buy
+# little and double the per-minute spend.
+#
+# GHCR auth: unchanged -- built-in GITHUB_TOKEN, scoped to packages: write here only.
+#
+# Runner: a GitHub-hosted larger runner (label MUST be created in org Actions settings
+# under Enterprise; see header). On a public repo this DOES bill per-minute -- standard
+# 2-core hosted runners are free for public repos, larger runners are NOT.
 
 on:
   workflow_dispatch:
@@ -28,7 +54,9 @@ concurrency:
 
 jobs:
   build:
-    runs-on: [self-hosted, fleet]
+    # NOTE: org-created GitHub-hosted larger runner label (Enterprise). Must exist
+    # before this runs; a missing label leaves the job QUEUED indefinitely.
+    runs-on: ubuntu-22.04-4core
     timeout-minutes: 240
     env:
       IMAGE: ghcr.io/skyphusion-labs/vivijure-audio-upscale
