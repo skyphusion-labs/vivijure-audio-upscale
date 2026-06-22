@@ -13,12 +13,17 @@ non-commercial restriction.
 | PyTorch | https://github.com/pytorch/pytorch | BSD-3-Clause | Provided by the base image. |
 | torchaudio | https://github.com/pytorch/audio | BSD-2-Clause | Audio I/O + transforms. |
 | FFmpeg | https://ffmpeg.org | LGPL-2.1 / GPL-2.0 | Audio decode/encode; invoked as a subprocess. |
+| runpod (SDK) | https://github.com/runpod/runpod-python | MIT | Serverless handler runtime/transport. |
+| boto3 (AWS SDK) | https://github.com/boto/boto3 | Apache-2.0 | R2/S3 client used by the handler (R2 mode). |
+| requests | https://github.com/psf/requests | Apache-2.0 | HTTP download/upload used by the handler (presigned mode). |
 
 resemble-enhance pulls additional permissive Python dependencies (e.g. librosa -- ISC; numpy,
 omegaconf -- BSD/MIT); their licenses live at their respective project pages. The authoritative
 copyright line and full license for each component live at its source URL above. Full license texts:
 AGPL-3.0 -> `LICENSE`. The MIT and BSD templates that govern the components above are reproduced
-below (each component retains its own upstream copyright notice).
+below (each component retains its own upstream copyright notice). The Apache-2.0 components (boto3,
+requests) are governed by the Apache License 2.0, whose full text lives at
+https://www.apache.org/licenses/LICENSE-2.0.
 
 ---
 
