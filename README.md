@@ -19,9 +19,8 @@ neural model -- cost-aware routing: GPU only when there's speech.
 
 This module is the **speech** node of Vivijure's finish chain. Two things to read off the diagram:
 (1) it is **audio in, audio out** and runs **before** lip-sync, so MuseTalk drives the mouth from the
-*cleaned* dialogue; (2) **music / score beds bypass it entirely** and take the CPU
-[`audio-mix`](https://github.com/skyphusion-labs/vivijure-audio-mix) path -- the GPU only ever sees
-speech.
+*cleaned* dialogue; (2) **music / score beds bypass it entirely** and take the CPU `audio-mix` path
+-- the GPU only ever sees speech.
 
 ```mermaid
 flowchart TD
