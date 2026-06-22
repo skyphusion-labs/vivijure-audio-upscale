@@ -1,0 +1,186 @@
+"""RunPod serverless handler -- speech audio-upscale (CUDA) for Vivijure's audio finish path.
+
+Cleans + restores + bandwidth-extends SPEECH with resemble-enhance (denoise -> enhance). Runs on the
+per-shot dialogue track BEFORE MuseTalk, so the lips sync to the cleaned audio. Thin/auto-generated
+TTS (Aura-1) comes out full and natural. Speech only -- music goes through the CPU audio-mix path.
+
+The transport contract + the {"selftest": true} GPU harness mirror vivijure-upscale exactly, so the
+studio router dispatches both the same way.
+
+Job input (one of three modes):
+  R2 mode (finish-chain module contract -- the endpoint reads/writes the shared bucket itself):
+    { "audio_key": "renders/<project>/dialogue/<shot>.wav", "output_key"?: "...", "denoise"?: true,
+      "nfe"?: 64, "solver"?: "midpoint", "lambd"?: 0.9, "tau"?: 0.5 }
+  Presigned mode (credentialless -- the caller presigns R2):
+    { "audio_url": "<presigned GET>", "output_url": "<presigned PUT>", "output_key"?: "..." }
+  Self-test (no R2 -- confirms CUDA + loads the model + enhances a generated clip end to end):
+    { "selftest": true }
+
+Returns: { ok, output_key, bytes, sr, applied: ["speech-upscale:resemble-enhance"] } on success;
+         { ok: false, error } on failure. The handler SURFACES failure (returns ok:false) -- it never
+         swallows it or silently passes the original through (cf. the #249 silent-degrade bug). The
+         `applied` tag is set ONLY on success. The orchestrator/router owns any soft-degrade policy.
+"""
+
+import os
+import shutil
+import subprocess
+import tempfile
+
+import boto3
+import requests
+import runpod
+import torch
+import torchaudio
+
+# resemble-enhance loads its checkpoints from a path inside the installed package; the image bakes
+# them there at build (see Dockerfile), so enhance()/denoise() never fetch at runtime.
+DOWNLOAD_TIMEOUT = 900
+UPLOAD_TIMEOUT = 900
+
+# resemble-enhance defaults (overridable per job): nfe = diffusion steps, lambd = denoise strength,
+# tau = prior temperature, solver = ODE solver. The package's documented inference knobs.
+DEFAULTS = {"nfe": 64, "solver": "midpoint", "lambd": 0.9, "tau": 0.5}
+
+
+def _device():
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _enhance_file(src, dst, *, denoise_first=False, **knobs):
+    """Load src (any torchaudio-readable audio), run resemble-enhance, write dst as 44.1k wav.
+    Returns the output sample rate. Heavy import is deferred so the module stays import-light."""
+    from resemble_enhance.enhancer.inference import denoise, enhance  # deferred
+
+    dwav, sr = torchaudio.load(src)
+    dwav = dwav.mean(dim=0)  # mix to mono 1-D, what resemble-enhance expects
+    device = _device()
+    if denoise_first:
+        dwav, sr = denoise(dwav, sr, device)
+    k = {**DEFAULTS, **{n: knobs[n] for n in DEFAULTS if knobs.get(n) is not None}}
+    wav, out_sr = enhance(dwav, sr, device, nfe=int(k["nfe"]), solver=str(k["solver"]),
+                          lambd=float(k["lambd"]), tau=float(k["tau"]))
+    torchaudio.save(dst, wav.unsqueeze(0).cpu(), out_sr)
+    return out_sr
+
+
+def _selftest(inp):
+    """Self-contained GPU verification -- NO R2. Confirms CUDA, loads the model, generates a tiny noisy
+    speech-band clip and actually enhances it end to end. Doubles as a health check."""
+    out = {"ok": False, "selftest": True, "torch_version": torch.__version__,
+           "cuda_available": torch.cuda.is_available()}
+    work = tempfile.mkdtemp(prefix="selftest-")
+    src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    try:
+        if torch.cuda.is_available():
+            out["gpu"] = torch.cuda.get_device_name(0)
+        # A 1s 16k mono tone + noise stands in for a thin TTS clip (we only prove the pipe runs).
+        gen = subprocess.run(
+            ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
+             "-i", "sine=frequency=220:duration=1:sample_rate=16000",
+             "-f", "lavfi", "-i", "anoisesrc=d=1:c=pink:r=16000:a=0.1",
+             "-filter_complex", "[0:a][1:a]amix=inputs=2", "-ac", "1", "-ar", "16000", src],
+            capture_output=True, text=True)
+        if gen.returncode != 0:
+            out["error"] = f"ffmpeg gen failed: {(gen.stderr or '')[-500:]}"
+            return out
+        out["input_sr"] = 16000
+        out["sr"] = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")))
+        if not os.path.exists(dst) or os.path.getsize(dst) == 0:
+            out["error"] = "no output produced"
+            return out
+        out["output_bytes"] = os.path.getsize(dst)
+        out["applied"] = ["speech-upscale:resemble-enhance"]
+        out["ok"] = True
+        return out
+    except Exception as e:  # noqa: BLE001 -- a job error is data, returned to the caller
+        out["error"] = str(e)[:800]
+        return out
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# --- R2 mode (the finish-chain module contract) -------------------------------------------------
+R2_ENDPOINT = os.environ.get("R2_ENDPOINT_URL", "")
+R2_BUCKET = os.environ.get("R2_BUCKET", "vivijure")
+
+
+def _r2():
+    return boto3.client(
+        "s3", endpoint_url=R2_ENDPOINT, region_name="auto",
+        aws_access_key_id=os.environ.get("R2_ACCESS_KEY_ID", ""),
+        aws_secret_access_key=os.environ.get("R2_SECRET_ACCESS_KEY", ""),
+    )
+
+
+def _enhanced_key(audio_key, output_key):
+    if output_key:
+        return output_key
+    name = audio_key.rsplit("/", 1)[-1]
+    return (f"{audio_key.rsplit('.', 1)[0]}_enh.wav" if "." in name else f"{audio_key}_enh.wav")
+
+
+def _upscale_r2(inp):
+    """R2 mode: download audio_key, enhance, upload output_key in the shared bucket; return the new key."""
+    audio_key = inp.get("audio_key")
+    output_key = _enhanced_key(audio_key, inp.get("output_key"))
+    if not (R2_ENDPOINT and os.environ.get("R2_ACCESS_KEY_ID")):
+        return {"ok": False, "error": "R2 mode needs R2_ENDPOINT_URL + R2_ACCESS_KEY_ID/SECRET in the endpoint env"}
+    work = tempfile.mkdtemp(prefix="enh-")
+    src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    try:
+        s3 = _r2()
+        s3.download_file(R2_BUCKET, audio_key, src)
+        sr = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")),
+                           nfe=inp.get("nfe"), solver=inp.get("solver"),
+                           lambd=inp.get("lambd"), tau=inp.get("tau"))
+        if not os.path.getsize(dst):
+            return {"ok": False, "error": "enhance produced no output"}
+        s3.upload_file(dst, R2_BUCKET, output_key, ExtraArgs={"ContentType": "audio/wav"})
+        return {"ok": True, "output_key": output_key, "audio_key": output_key,
+                "bytes": os.path.getsize(dst), "sr": sr,
+                "applied": ["speech-upscale:resemble-enhance"]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:500]}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def handler(job):
+    inp = (job or {}).get("input") or {}
+    if inp.get("selftest"):
+        return _selftest(inp)
+    if inp.get("audio_key"):
+        return _upscale_r2(inp)
+    audio_url = inp.get("audio_url")
+    output_url = inp.get("output_url")
+    output_key = inp.get("output_key", "")
+    if not audio_url or not output_url:
+        return {"ok": False, "error": "input needs presigned audio_url + output_url"}
+    work = tempfile.mkdtemp(prefix="enh-")
+    src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    try:
+        with requests.get(audio_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
+            r.raise_for_status()
+            with open(src, "wb") as f:
+                for chunk in r.iter_content(1 << 20):
+                    f.write(chunk)
+        sr = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")),
+                           nfe=inp.get("nfe"), solver=inp.get("solver"),
+                           lambd=inp.get("lambd"), tau=inp.get("tau"))
+        size = os.path.getsize(dst)
+        if not size:
+            return {"ok": False, "error": "enhance produced no output"}
+        with open(dst, "rb") as f:
+            put = requests.put(output_url, data=f, timeout=UPLOAD_TIMEOUT,
+                               headers={"content-type": "audio/wav", "content-length": str(size)})
+        put.raise_for_status()
+        return {"ok": True, "output_key": output_key, "bytes": size, "sr": sr,
+                "applied": ["speech-upscale:resemble-enhance"]}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e)[:500]}
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+runpod.serverless.start({"handler": handler})
