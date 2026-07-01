@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+
+# local deploy secrets (never commit)
+deploy.env
