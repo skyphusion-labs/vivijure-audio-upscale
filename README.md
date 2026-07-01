@@ -1,72 +1,127 @@
 # vivijure-audio-upscale
 
-[![build-image](https://github.com/skyphusion-labs/vivijure-audio-upscale/actions/workflows/build-image.yml/badge.svg)](https://github.com/skyphusion-labs/vivijure-audio-upscale/actions/workflows/build-image.yml)
+**Cleans up spoken dialogue so voices sound clear and full.** This is the audio cleanup finish engine
+for [Vivijure](https://github.com/skyphusion-labs/vivijure), the AI film studio. It runs on a GPU
+(RunPod), takes a dialogue track, and hands back a cleaner, fuller version. Under the hood it is
+[resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (denoise, restore, and stretch the
+audio up to 44.1 kHz).
 
-> **Validated:** the image test-builds clean; the model loads and `enhance()` runs on CPU
-> (bandwidth-extends 16 kHz -> 44.1 kHz). The full GPU `{"selftest": true}` harness is endpoint-gated
-> (run once the RunPod endpoint is pinned -- a deliberate, spend-gated step).
+It cleans **speech only**. Music and score beds do not go through it; they take the studio's cheaper
+CPU audio path instead. That is the point: only spend GPU time when there is a voice to clean. It runs
+on a shot's dialogue **before** lip-sync, so the mouth follows the cleaned audio and thin auto-generated
+voices come out natural.
 
-A RunPod serverless image that enhances **speech** audio on GPU with
-[resemble-enhance](https://github.com/resemble-ai/resemble-enhance) (denoise -> restore ->
-bandwidth-extend). The CUDA half of Vivijure's audio finish path: it runs on a shot's **dialogue**
-track **before** MuseTalk, so the lip-sync follows the cleaned audio and thin/auto-generated TTS
-(Aura-1) comes out full and natural.
+## Where this fits
 
-Speech only. Music / score beds go through the CPU `audio-mix` path (ffmpeg DSP "mastering"), not a
-neural model -- cost-aware routing: GPU only when there's speech.
+Vivijure is not one program. It is a small group of programs that work together, called the
+**constellation**. The **Studio** is the center; it tells engines like this one what to do. This map
+is the same in every repo, so you always know where you are.
 
-## The Vivijure ecosystem
+```mermaid
+flowchart TD
+    subgraph front[You and your friends]
+        discord[Discord chat]
+        ui[Studio web page]
+    end
 
-Vivijure is an AI film studio built as a thin control plane plus opt-in GPU modules. These repos
-form the constellation; this block is identical in each so the whole map is visible from any one of
-them.
+    slate[slate<br/>Discord screenwriter bot]
 
+    subgraph core[The control plane]
+        studio[vivijure Studio<br/>projects, storyboard, cast,<br/>render orchestration + module registry]
+    end
+
+    subgraph modules[Modules: one job each, opt-in]
+        cloudmods[Cloud video modules<br/>Seedance, Kling, Veo, Wan, ...]
+        finishmods[Finish modules<br/>upscale, smooth, lip-sync, titles]
+        audiomods[Audio modules<br/>music, narration]
+    end
+
+    subgraph gpu[The GPU render engines]
+        backend[vivijure-backend<br/>RunPod cloud GPU:<br/>keyframes, image-to-video, LoRA training]
+        local12[vivijure-local-12gb<br/>your own 12GB card LTX]
+        local16[vivijure-local-16gb<br/>your own 16GB card CogVideoX]
+    end
+
+    subgraph finish[Finish helper engines]
+        musetalk[vivijure-musetalk<br/>lip-sync]
+        upscale[vivijure-upscale<br/>video upscale]
+        audioup[vivijure-audio-upscale<br/>audio cleanup]
+    end
+
+    discord --> slate
+    slate --> studio
+    ui --> studio
+    studio --> cloudmods
+    studio --> finishmods
+    studio --> audiomods
+    cloudmods --> backend
+    finishmods --> musetalk
+    finishmods --> upscale
+    audiomods --> audioup
+    studio --> backend
+    studio --> local12
+    studio --> local16
 ```
-   friends + Slate (Discord)
-            |
-            v
-        slate  -->  vivijure (studio control plane / JSON API)
-                        |
-                        v
-                  vivijure-backend (GPU render: keyframes -> i2v -> assemble)
-                        |
-            +-----------+-----------------------------+
-            |           |               |             |
-            v           v               v             v
-     vivijure-     vivijure-       vivijure-      (more finish
-     musetalk      upscale         audio-upscale   modules over time)
-   (lip-sync)    (video upscale)  (speech enhance)
+
+The full map, with a plain-English walk-through, is in [docs/constellation.md](docs/constellation.md).
+
+## Deploy this finish engine
+
+You need a **RunPod** account (the GPU) and a **registry** to hold the image (like `ghcr.io`). Then:
+
+```bash
+cp deploy.env.example deploy.env   # then open deploy.env and fill in your keys
+./deploy.sh                        # safe to re-run
 ```
 
-| Repo | Role |
+The script builds the image, pushes it to your registry, creates the RunPod endpoint, and prints an
+**endpoint id**. It is idempotent (safe to re-run) and fails closed (stops on the first error). The
+full walk-through, with every setting explained, is in [docs/deploy.md](docs/deploy.md).
+
+**Pin the right GPU.** This image is CUDA 12.8, which needs a new-driver host. Pin it to **Blackwell
+(RTX PRO 6000)** or **Hopper (H100 / H200)** cards. The job is short and light on VRAM, so a
+scale-to-zero endpoint on these cards still costs pennies.
+
+## Turn it on in the studio
+
+This engine powers the studio's **speech-upscale** module. Its endpoint id is a **per-module secret**,
+not an account secret, so wiring it is slightly different from the video engines:
+
+1. Copy the endpoint id the script printed.
+2. In your studio folder, run:
+   `npx wrangler secret put RUNPOD_ENDPOINT_ID -c modules/speech-upscale/wrangler.toml`
+   and paste the endpoint id when asked.
+3. Keep the `speech-upscale` (`MODULE_SPEECH_UPSCALE`) binding on and deploy the studio.
+
+See the studio's [docs/opt-in-tiers.md](https://github.com/skyphusion-labs/vivijure/blob/main/docs/opt-in-tiers.md)
+(the "speech-upscale" entry).
+
+## The settings (knobs)
+
+Every setting is in `deploy.env`, and each one is explained in full (what it is, why, an example) in
+[docs/deploy.md](docs/deploy.md). In short:
+
+| Setting | What it does |
 |---|---|
-| [slate](https://github.com/skyphusion-labs/slate) | Collaborative AI screenwriter assistant for Discord. Friends and Slate co-author a film in-channel; Slate then submits it to the studio entirely through the vivijure JSON API. |
-| [vivijure](https://github.com/skyphusion-labs/vivijure) | The studio control plane (a Cloudflare Worker): planner, cast, and render UI plus the JSON API. A thin module host that orchestrates render jobs behind a typed hook contract. |
-| [vivijure-backend](https://github.com/skyphusion-labs/vivijure-backend) | The GPU render backend (RunPod serverless): SDXL keyframes, Wan image-to-video, and ffmpeg assembly. The half that turns a storyboard bundle into a film. |
-| [vivijure-musetalk](https://github.com/skyphusion-labs/vivijure-musetalk) | MuseTalk audio-driven lip-sync GPU module (finish-class). Syncs a character's mouth to dialogue audio. |
-| [vivijure-upscale](https://github.com/skyphusion-labs/vivijure-upscale) | Real-ESRGAN CUDA video-upscale GPU module (finish-class). Raises the assembled film's resolution. |
-| [vivijure-audio-upscale](https://github.com/skyphusion-labs/vivijure-audio-upscale) | CUDA speech-audio enhancement (resemble-enhance) GPU module. The GPU half of the cost-aware audio finish path. |
+| `RUNPOD_API_KEY` | Your RunPod key, so the script can make the endpoint. |
+| `IMAGE` | The image name to build, push, and run (point it at your own registry). |
+| `ENDPOINT_NAME` | A label for the endpoint (re-runs reuse it by this name). |
+| `GPU_TYPE_IDS` | Which GPU cards to pin (Blackwell or Hopper for this cu128 image). |
+| `CONTAINER_DISK_GB` | Disk for the container (default 20; weights are ~713MB). |
+| `WORKERS_MIN` / `WORKERS_MAX` | Scaling bounds; min 0 = scale to zero = pay nothing when idle. |
+| `CONTAINER_REGISTRY_AUTH_ID` | RunPod credential id, only if your image is private. |
+| `R2_ENDPOINT_URL` / `R2_BUCKET` / `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 keys for the studio's finish-chain mode (the endpoint reads/writes your bucket by key). |
 
-## Team
+Per-job cleanup knobs the studio can pass (defaults are tuned): **`denoise`** (default off; a first
+denoise pass for noisy audio), **`nfe`** (default 64; refinement steps), **`lambd`** (default 0.9;
+denoise strength), **`tau`** (default 0.5; smooth-versus-detailed), **`solver`** (default `midpoint`;
+the stepping method).
 
-Vivijure is built by Conrad (`skyphusion`) and his named AI crew. The crew are treated as
-individuals, each working in their own lane with their own GitHub identity; this is the same
-transparent framing used across the project.
+## How it flows in the finish chain
 
-| Member | Role | GitHub |
-|---|---|---|
-| Conrad | Creator / director | [@skyphusion](https://github.com/skyphusion) |
-| Mackaye | PM / tech lead | [@skyphusion-mackaye](https://github.com/skyphusion-mackaye) |
-| Strummer | Infrastructure | [@skyphusion-strummer](https://github.com/skyphusion-strummer) |
-| Rollins | Backend / modules | [@skyphusion-rollins](https://github.com/skyphusion-rollins) |
-| Joan | Frontend / extraction | [@skyphusion-joan](https://github.com/skyphusion-joan) |
-
-## Where it fits
-
-This module is the **speech** node of Vivijure's finish chain. Two things to read off the diagram:
-(1) it is **audio in, audio out** and runs **before** lip-sync, so MuseTalk drives the mouth from the
-*cleaned* dialogue; (2) **music / score beds bypass it entirely** and take the CPU `audio-mix` path
--- the GPU only ever sees speech.
+Two things to read off this diagram: this engine is **audio in, audio out** and runs **before**
+lip-sync, so MuseTalk drives the mouth from the cleaned dialogue; and music beds **bypass** it entirely
+for the CPU path.
 
 ```mermaid
 flowchart TD
@@ -102,47 +157,44 @@ flowchart TD
     class MUSIC,MIX cpu;
 ```
 
-The video side of `finish` (MuseTalk lip-sync, then RIFE interpolation, then video-upscale /
-text-overlay) is its own chain of single-purpose GPU modules; see the siblings
-[`vivijure-musetalk`](https://github.com/skyphusion-labs/vivijure-musetalk) and
-[`vivijure-upscale`](https://github.com/skyphusion-labs/vivijure-upscale).
+## The job contract
 
-## Models
+Three modes, so you know exactly what the endpoint does.
 
-resemble-enhance's checkpoints (the ResembleAI/resemble-enhance HF repo, ~713 MB) are baked into the
-image at build via a `git-lfs` clone into the package's `model_repo`, so a cold worker never
-re-downloads the weights. At startup the package does a cheap `git pull` (LFS-skipped) against the
-already-baked repo, then loads.
-
-## Job input
-
-R2 mode (finish-chain module contract -- the endpoint reads/writes the shared bucket itself):
-
-```json
-{ "audio_key": "renders/<project>/dialogue/<shot>.wav", "output_key": "...optional...",
-  "denoise": true, "nfe": 64, "lambd": 0.9, "tau": 0.5, "solver": "midpoint" }
-```
-
-Presigned mode (credentialless -- the caller presigns R2):
-
-```json
-{ "audio_url": "<presigned GET>", "output_url": "<presigned PUT>", "output_key": "..." }
-```
-
-Self-test (no R2 -- confirms CUDA, loads the model, enhances a generated clip end to end):
-
-```json
-{ "selftest": true }
-```
+- **R2 finish-chain mode:** `{ "audio_key": "...", "output_key": "...", "denoise": true, "nfe": 64,
+  "lambd": 0.9, "tau": 0.5, "solver": "midpoint" }`.
+- **Presigned mode:** `{ "audio_url": "...", "output_url": "...", "output_key": "..." }`.
+- **Self-test:** `{ "selftest": true }` enhances a generated clip end to end.
 
 Returns `{ ok, output_key, bytes, sr, applied: ["speech-upscale:resemble-enhance"] }` on success, or
-`{ ok: false, error }` on failure. The handler **surfaces** failure (returns `ok:false`) -- it never
-swallows it or silently passes the original through; the `applied` tag is set only on success, and
-the orchestrator/router owns any soft-degrade policy. The transport contract and the self-test
-harness mirror `vivijure-upscale`.
+`{ ok: false, error }` on failure. Unlike the video engines, this one **surfaces** a failure (returns
+`ok:false`) instead of passing the original through: the studio's router owns the soft-degrade
+decision, and the `applied` tag is set only on real success, so a miss is never hidden.
+
+## How it runs
+
+The resemble-enhance checkpoints (about 713MB) are **baked into the image** at build, so a cold worker
+never re-downloads them. The heavy model import is deferred until a job actually runs, so the handler
+stays light to start.
+
+## The team
+
+Vivijure is built by Conrad (`skyphusion`) and his named AI crew, each working in their own lane with
+their own GitHub identity.
+
+| Member | Role | GitHub |
+|---|---|---|
+| Conrad | Creator / director | [@skyphusion](https://github.com/skyphusion) |
+| Mackaye | PM / tech lead | [@skyphusion-mackaye](https://github.com/skyphusion-mackaye) |
+| Strummer | Infrastructure | [@skyphusion-strummer](https://github.com/skyphusion-strummer) |
+| Rollins | Backend / modules | [@skyphusion-rollins](https://github.com/skyphusion-rollins) |
+| Joan | Frontend / extraction | [@skyphusion-joan](https://github.com/skyphusion-joan) |
 
 ## License
 
-**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it stays a commons. It is not for sale, and not to be resold as a SaaS.
+**AGPL-3.0-only.** A labor of love, given freely: use it, learn from it, self-host it, build your own
+creative visions on it. Run it as a network service and the AGPL has you share your changes back, so it
+stays a commons. It is not for sale, and not to be resold as a SaaS.
 
-Third-party components it incorporates (resemble-enhance -- MIT; PyTorch / torchaudio -- BSD; FFmpeg) are listed in `THIRD_PARTY_NOTICES.md`.
+Third-party components it incorporates (resemble-enhance, MIT; PyTorch / torchaudio, BSD; FFmpeg) are
+listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
