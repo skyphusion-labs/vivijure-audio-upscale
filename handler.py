@@ -120,10 +120,29 @@ def _enhanced_key(audio_key, output_key):
     return (f"{audio_key.rsplit('.', 1)[0]}_enh.wav" if "." in name else f"{audio_key}_enh.wav")
 
 
+def _key_error(key, what, prefixes=("renders/",)):
+    """Validate a job-supplied R2 key against the render key map BEFORE any bucket I/O. Every key
+    this module reads or writes lives inside the studio's render tree (see the module docstring),
+    so an absolute key, a `..` segment, a backslash, or an out-of-prefix key is a malformed job.
+    Refused as data (this handler reports errors, it does not raise): returns the error string,
+    or None when the key is fine."""
+    k = str(key or "")
+    ok = (bool(k) and k == k.strip() and not k.startswith("/") and "\\" not in k
+          and ".." not in k.split("/") and k.startswith(tuple(prefixes)))
+    return None if ok else f"{what}: R2 key {k!r} must be a plain relative key under {' or '.join(prefixes)}"
+
+
 def _upscale_r2(inp):
     """R2 mode: download audio_key, enhance, upload output_key in the shared bucket; return the new key."""
     audio_key = inp.get("audio_key")
+    # dialogue tracks live under renders/; a staged bed lives under audio/ -- both are in-map
+    err = _key_error(audio_key, "audio_key", prefixes=("renders/", "audio/"))
+    if err:
+        return {"ok": False, "error": err}
     output_key = _enhanced_key(audio_key, inp.get("output_key"))
+    err = _key_error(output_key, "output_key", prefixes=("renders/", "audio/"))
+    if err:
+        return {"ok": False, "error": err}
     if not (R2_ENDPOINT and os.environ.get("R2_ACCESS_KEY_ID")):
         return {"ok": False, "error": "R2 mode needs R2_ENDPOINT_URL + R2_ACCESS_KEY_ID/SECRET in the endpoint env"}
     work = tempfile.mkdtemp(prefix="enh-")
