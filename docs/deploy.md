@@ -52,7 +52,7 @@ means and why.
   endpoint. Example: `RUNPOD_API_KEY=rpa_XXXX...`.
 - **`IMAGE`** -- the image name to build and run. Why: it is both where the script pushes the image
   and what the endpoint pulls. Point it at your own registry. Example:
-  `IMAGE=ghcr.io/yourname/vivijure-audio-upscale:latest`.
+  `IMAGE=ghcr.io/yourname/vivijure-audio-upscale:0.1.0` (pin an explicit release; never `:latest`).
 - **`ENDPOINT_NAME`** -- a label for the endpoint. Why: the script finds and reuses an endpoint by
   this name, so re-running is safe. Example: `ENDPOINT_NAME=vivijure-audio-upscale`.
 - **`GPU_TYPE_IDS`** -- which GPU cards RunPod may use, separated by commas. Why: this image is built

@@ -73,8 +73,8 @@ python -m py_compile handler.py
 ```
 
 **Release / deploy mechanics.** `.github/workflows/build-image.yml` builds + pushes to GHCR on a push to
-`main` (touching the build inputs) as `:latest` + `:<sha>`; a pushed semver tag would ALSO publish the
-bare release tag (none cut yet). PUBLIC repo, so CI runs on GitHub-hosted `ubuntu-latest`. The RunPod
+`main` (touching the build inputs) as a `sha-<short>` smoke image only (there is no `:latest`); a pushed SemVer tag (first
+cut: `v0.1.0`, 2026-07-02) ALSO publishes the pinnable release image tagged `<version>` + `<major>.<minor>` + `sha-<short>`. PUBLIC repo, so CI runs on GitHub-hosted `ubuntu-latest`. The RunPod
 endpoint's image tag, **GPU type, and R2 env are dashboard / endpoint-config knobs** (RunPod's API
 does not honor them); **container-registry-auth IS now MCP/API-manageable** (RunPod MCP
 `create-container-registry-auth` + attach via `containerRegistryAuthId` on create/update-template, no
