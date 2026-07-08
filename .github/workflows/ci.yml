@@ -15,9 +15,6 @@ on:
 # Least-privilege CI token: lint + compile only; never writes the repo, pushes an image, or needs a secret.
 permissions:
   contents: read
-  id-token: write
-  code-quality: write
-  pull-requests: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -37,14 +34,3 @@ jobs:
         run: ruff check --select E9,F .
       - name: Syntax-compile the handler
         run: python -m py_compile handler.py
-      - name: Collect minimal coverage (parse-only surface; no GPU tests yet)
-        run: |
-          pip install coverage==7.10.7
-          coverage run --source=handler -c "import ast; ast.parse(open('handler.py').read())"
-          coverage xml
-      - name: Upload coverage report
-        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-        uses: actions/upload-code-coverage@v1
-        with:
-          file: ./coverage.xml
-          language: python
