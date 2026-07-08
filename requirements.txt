@@ -4,16 +4,16 @@
 celluloid>=0.2.0
 deepspeed  # torch-2.8 base: latest deepspeed is fine (0.15+ uses torch.library.custom_op, present in torch>=2.4)
 huggingface-hub
-librosa>=0.10.1
+librosa>=0.11.0
 matplotlib>=3.8.1
 numpy>=1.26.2
 omegaconf>=2.3.0
-pandas>=2.1.3
+pandas>=3.0.3
 ptflops>=0.7.1.2
-rich>=13.7.0
-scipy>=1.18.0
+rich>=15.0.0
+scipy>=1.11.4
 soundfile>=0.12.1
-tqdm>=4.66.1
+tqdm>=4.68.4
 resampy>=0.4.2
 tabulate>=0.8.10
 runpod
