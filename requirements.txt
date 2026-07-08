@@ -4,7 +4,7 @@
 celluloid>=0.2.0
 deepspeed  # torch-2.8 base: latest deepspeed is fine (0.15+ uses torch.library.custom_op, present in torch>=2.4)
 huggingface-hub
-librosa>=0.10.1
+librosa>=0.11.0
 matplotlib>=3.8.1
 numpy>=1.26.2
 omegaconf>=2.3.0
