@@ -14,7 +14,7 @@ rich>=15.0.0
 scipy>=1.11.4
 soundfile>=0.12.1
 tqdm>=4.68.4
-resampy>=0.4.2
+resampy>=0.4.3
 tabulate>=0.8.10
 runpod
 boto3
