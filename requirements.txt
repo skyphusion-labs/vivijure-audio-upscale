@@ -15,7 +15,7 @@ scipy>=1.18.0
 soundfile>=0.12.1
 tqdm>=4.68.4
 resampy>=0.4.3
-tabulate>=0.8.10
+tabulate>=0.10.0
 runpod
 boto3
 requests
