@@ -32,7 +32,12 @@ COPY requirements.txt /app/requirements.txt
 # <3.12 even though we install --no-deps and run inference on the base torch 2.8 stack.
 # --ignore-requires-python keeps the Blackwell-capable cu128 base (pinning a separate 3.11
 # interpreter would not inherit those CUDA wheels). See #42.
+#
+# deepspeed is sdist-only: install it with the base torch visible (--no-build-isolation) and
+# skip native ops (inference path does not need them). Keeps a resolver hiccup from burning
+# the build on ModuleNotFoundError: torch inside pip's isolated env.
 RUN pip install --no-cache-dir --no-deps --ignore-requires-python resemble-enhance && \
+    DS_BUILD_OPS=0 pip install --no-cache-dir --no-build-isolation "deepspeed>=0.15.0" && \
     pip install --no-cache-dir --ignore-requires-python -r /app/requirements.txt
 
 # Bake the model weights into the image (no network volume). resemble-enhance's download() git-clones

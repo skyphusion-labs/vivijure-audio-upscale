@@ -2,15 +2,18 @@
 # fastapi-cli chain sends pip into a backtracking storm and isn't needed for serverless inference).
 # torch / torchaudio / torchvision come from the CUDA base image.
 celluloid>=0.2.0
-deepspeed  # torch-2.8 base: latest deepspeed is fine (0.15+ uses torch.library.custom_op, present in torch>=2.4)
+# deepspeed is installed in the Dockerfile (DS_BUILD_OPS=0, --no-build-isolation) so
+# pip can see the base-image torch; do not list it here.
 huggingface-hub
 # Base image is Python 3.12; librosa's loose numba>=0.51 lets pip backtrack into
 # pre-3.12 llvmlite sdists that hard-fail with RuntimeError (see #42 follow-up after #43).
-numba>=0.59.0
-llvmlite>=0.42.0
+# numba 0.66 requires numpy<2.5; numpy>=2.5.1 (from #44 era) forces an unbounded
+# backtrack that eventually fails building old deepspeed sdists.
+numba>=0.66.0
+llvmlite>=0.48.0,<0.49
 librosa>=0.11.0
 matplotlib>=3.11.0
-numpy>=2.5.1
+numpy>=2.2.0,<2.5
 omegaconf>=2.3.1
 pandas>=3.0.3
 ptflops>=0.7.5
