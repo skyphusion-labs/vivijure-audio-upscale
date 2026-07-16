@@ -27,7 +27,12 @@ COPY requirements.txt /app/requirements.txt
 # backtracking storm on this base AND we serve no UI. So install resemble-enhance WITHOUT its deps
 # and pin the inference runtime deps ourselves (requirements.txt, gradio dropped). torch/torchaudio/
 # torchvision come from the base image and satisfy resemble-enhance's >=2.1.1 floors.
-RUN pip install --no-cache-dir --no-deps resemble-enhance && \
+#
+# Base image Python is 3.12.3 (Ubuntu 24.04); resemble-enhance still declares Requires-Python
+# <3.12 even though we install --no-deps and run inference on the base torch 2.8 stack.
+# --ignore-requires-python keeps the Blackwell-capable cu128 base (pinning a separate 3.11
+# interpreter would not inherit those CUDA wheels). See #42.
+RUN pip install --no-cache-dir --no-deps --ignore-requires-python resemble-enhance && \
     pip install --no-cache-dir -r /app/requirements.txt
 
 # Bake the model weights into the image (no network volume). resemble-enhance's download() git-clones
