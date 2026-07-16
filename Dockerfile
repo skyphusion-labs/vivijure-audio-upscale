@@ -33,7 +33,7 @@ COPY requirements.txt /app/requirements.txt
 # --ignore-requires-python keeps the Blackwell-capable cu128 base (pinning a separate 3.11
 # interpreter would not inherit those CUDA wheels). See #42.
 RUN pip install --no-cache-dir --no-deps --ignore-requires-python resemble-enhance && \
-    pip install --no-cache-dir -r /app/requirements.txt
+    pip install --no-cache-dir --ignore-requires-python -r /app/requirements.txt
 
 # Bake the model weights into the image (no network volume). resemble-enhance's download() git-clones
 # the ResembleAI/resemble-enhance HF repo into <pkg>/model_repo (LFS weights); we pre-clone it here

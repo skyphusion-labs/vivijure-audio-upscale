@@ -4,6 +4,10 @@
 celluloid>=0.2.0
 deepspeed  # torch-2.8 base: latest deepspeed is fine (0.15+ uses torch.library.custom_op, present in torch>=2.4)
 huggingface-hub
+# Base image is Python 3.12; librosa's loose numba>=0.51 lets pip backtrack into
+# pre-3.12 llvmlite sdists that hard-fail with RuntimeError (see #42 follow-up after #43).
+numba>=0.59.0
+llvmlite>=0.42.0
 librosa>=0.11.0
 matplotlib>=3.11.0
 numpy>=2.5.1
