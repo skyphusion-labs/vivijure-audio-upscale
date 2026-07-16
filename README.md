@@ -194,7 +194,7 @@ their own GitHub identity.
 
 Vivijure operators wiring **speech cleanup finish** on RunPod GPU (resemble-enhance for dialogue and narration paths).
 
-**Vivijure Studio:** https://vivijure.com · **Skyphusion Labs:** https://skyphusion.org
+**Vivijure Studio:** https://vivijure.com · **Live demo:** https://demo.vivijure.com · **Skyphusion Labs:** https://skyphusion.org
 
 ## Support
 
