@@ -7,13 +7,13 @@ celluloid>=0.2.0
 huggingface-hub
 # Base image is Python 3.12; librosa's loose numba>=0.51 lets pip backtrack into
 # pre-3.12 llvmlite sdists that hard-fail with RuntimeError (see #42 follow-up after #43).
-# numba 0.66 requires numpy<2.5; numpy>=2.5.1 (from #44 era) forces an unbounded
-# backtrack that eventually fails building old deepspeed sdists.
+# numba 0.66 requires numpy<2.5. Dependabot #53 bumped to numpy>=2.5.1 and broke
+# pip resolution (ResolutionImpossible vs numba). Keep numpy under the numba ceiling.
 numba>=0.66.0
 llvmlite>=0.48.0,<0.49
 librosa>=0.11.0
 matplotlib>=3.11.1
-numpy>=2.5.1,<2.6
+numpy>=2.2.0,<2.5
 omegaconf>=2.3.1
 pandas>=3.0.3
 ptflops>=0.7.5
