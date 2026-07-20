@@ -40,6 +40,12 @@ RUN pip install --no-cache-dir --no-deps --ignore-requires-python resemble-enhan
     DS_BUILD_OPS=0 pip install --no-cache-dir --no-build-isolation "deepspeed>=0.15.0" && \
     pip install --no-cache-dir --ignore-requires-python -r /app/requirements.txt
 
+# resemble-enhance cfm.py uses float(fsolve(...)) without [0]; NumPy 2.x raises TypeError at enhance()
+# runtime (build-time load_enhancer alone does not hit this path). Patch upstream #74 locally until PyPI
+# ships a fixed wheel. See scripts/patch_resemble_enhance_numpy2.py.
+COPY scripts/patch_resemble_enhance_numpy2.py /app/scripts/patch_resemble_enhance_numpy2.py
+RUN python /app/scripts/patch_resemble_enhance_numpy2.py
+
 # Bake the model weights into the image (no network volume). resemble-enhance's download() git-clones
 # the ResembleAI/resemble-enhance HF repo into <pkg>/model_repo (LFS weights); we pre-clone it here
 # with git-lfs so the real 713MB checkpoint is baked. At runtime download() then sees model_repo/.git
