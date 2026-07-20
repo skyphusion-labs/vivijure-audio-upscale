@@ -12,7 +12,7 @@ huggingface-hub
 numba>=0.66.0
 llvmlite>=0.48.0,<0.49
 librosa>=0.11.0
-matplotlib>=3.11.0
+matplotlib>=3.11.1
 numpy>=2.2.0,<2.5
 omegaconf>=2.3.1
 pandas>=3.0.3
