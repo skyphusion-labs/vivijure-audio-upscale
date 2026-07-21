@@ -89,6 +89,10 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          # Host prep (fleet prep-runpod-base-for-pip-builds.sh) rewrites the LOCAL
+          # runpod/pytorch tag before each Plane C job. pull:false keeps BuildKit from
+          # re-fetching the registry FROM and undoing that prep (fc#754 / musetalk pattern).
+          pull: false
           # Build always (smoke on main/PR); publish ONLY on a version tag or a
           # deliberate workflow_dispatch. A bare merge to main never pushes.
           push: ${{ github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v') }}
