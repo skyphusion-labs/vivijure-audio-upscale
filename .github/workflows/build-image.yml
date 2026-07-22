@@ -144,19 +144,35 @@ jobs:
         # Plain docker build (not build-push-action/buildx): host prep rewrites the LOCAL
         # runpod/pytorch tag; buildx re-resolves the registry digest and bypasses prep
         # (fc#754 cryptography footgun). Matches vivijure-musetalk build-image.yml.
+        # meta.outputs.tags is newline-separated -- must not expand inline in `for t in …`.
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
           ARGS=""
-          for t in ${{ steps.meta.outputs.tags }}; do ARGS="$ARGS -t $t"; done
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            ARGS="$ARGS -t $t"
+          done <<< "$META_TAGS"
           docker build $ARGS .
 
       - name: Push image
         # Publish ONLY on a version tag or a deliberate workflow_dispatch; a bare
         # merge to main builds the image above as a smoke but never pushes it.
         if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          for t in ${{ steps.meta.outputs.tags }}; do docker push "$t"; done
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            docker push "$t"
+          done <<< "$META_TAGS"
 
       - name: Remove local image to free runner disk
         if: always()
+        env:
+          META_TAGS: ${{ steps.meta.outputs.tags }}
         run: |
-          for t in ${{ steps.meta.outputs.tags }}; do docker image rm "$t" || true; done
+          while IFS= read -r t; do
+            [ -n "$t" ] || continue
+            docker image rm "$t" || true
+          done <<< "$META_TAGS"
