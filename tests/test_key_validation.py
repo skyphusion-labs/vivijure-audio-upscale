@@ -20,7 +20,29 @@ def _stub(name, **attrs):
 _stub("torch", cuda=types.SimpleNamespace(is_available=lambda: False), __version__="0-stub")
 _stub("torchaudio")
 _stub("boto3", client=lambda *a, **k: None)
-_stub("requests")
+
+
+class _HTTPAdapter:
+    def __init__(self, *a, **k):
+        pass
+
+    def init_poolmanager(self, *a, **k):
+        return None
+
+
+class _Session:
+    def mount(self, *a, **k):
+        pass
+
+    def request(self, *a, **k):
+        raise AssertionError("network must not run in key-validation tests")
+
+
+_adapters = types.ModuleType("requests.adapters")
+_adapters.HTTPAdapter = _HTTPAdapter
+sys.modules["requests.adapters"] = _adapters
+_requests = _stub("requests", Session=_Session)
+_requests.adapters = _adapters
 _runpod = _stub("runpod")
 _runpod.serverless = types.SimpleNamespace(start=lambda *a, **k: None)
 

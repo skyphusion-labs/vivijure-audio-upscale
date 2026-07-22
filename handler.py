@@ -30,7 +30,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 import boto3
 import requests
@@ -47,12 +47,35 @@ UPLOAD_TIMEOUT = 900
 R2_URL_HOST_SUFFIX = os.environ.get("R2_URL_HOST_SUFFIX", "").strip().lower()
 
 
+def _ip_blocked(ip):
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def _resolve_public_ips(host):
+    """Resolve host; return public IPs or raise ValueError with a job-facing message."""
+    try:
+        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as e:
+        raise ValueError(f"URL host does not resolve: {e}") from e
+    public, blocked = [], False
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if _ip_blocked(ip):
+            blocked = True
+        else:
+            public.append(str(ip))
+    if blocked or not public:
+        raise ValueError("URL resolves to a blocked address")
+    return public
+
+
 def _url_error(url, what):
     """Refuse non-https / private / link-local / loopback / optional non-R2 host. Returns err str or None.
 
     Presigned mode otherwise lets any job submitter drive GET/PUT from the GPU worker (SSRF). Resolve
-    the hostname and reject blocked address classes; callers must also pass allow_redirects=False so a
-    public host cannot bounce into a private one via Location."""
+    the hostname and reject blocked address classes; callers must also pass allow_redirects=False and
+    connect to a pre-validated IP (see _pinned_https) so DNS cannot rebind between check and fetch."""
     try:
         p = urlparse(str(url or ""))
     except Exception:  # noqa: BLE001 -- malformed URL is a job error, not a crash
@@ -68,15 +91,42 @@ def _url_error(url, what):
         if host != bare and not host.endswith(suffix):
             return f"{what}: URL host must end with {R2_URL_HOST_SUFFIX}"
     try:
-        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
-    except socket.gaierror:
-        return f"{what}: URL host does not resolve"
-    for _fam, _type, _proto, _canon, sockaddr in infos:
-        ip = ipaddress.ip_address(sockaddr[0])
-        if (ip.is_private or ip.is_loopback or ip.is_link_local
-                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
-            return f"{what}: URL resolves to a blocked address"
+        _resolve_public_ips(host)
+    except ValueError as e:
+        return f"{what}: {e}"
     return None
+
+
+def _pinned_https(method, url, *, timeout, headers=None, data=None, stream=False):
+    """HTTPS GET/PUT that resolves once, rejects private addrs, and connects to that IP (DNS-rebinding safe)."""
+    from requests.adapters import HTTPAdapter  # deferred: keeps CPU test stubs light
+
+    class _SniAdapter(HTTPAdapter):
+        """Keep TLS SNI / hostname verify on the original host while connecting to a pinned IP."""
+
+        def __init__(self, server_hostname, **kwargs):
+            self._server_hostname = server_hostname
+            super().__init__(**kwargs)
+
+        def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+            pool_kwargs["assert_hostname"] = self._server_hostname
+            pool_kwargs["server_hostname"] = self._server_hostname
+            return super().init_poolmanager(connections, maxsize, block=block, **pool_kwargs)
+
+    p = urlparse(str(url or ""))
+    if p.scheme != "https" or not p.hostname:
+        raise ValueError("URL must be https with a hostname")
+    host = p.hostname.lower()
+    ip = _resolve_public_ips(host)[0]
+    netloc_host = f"[{ip}]" if ":" in ip else ip
+    netloc = f"{netloc_host}:{p.port}" if p.port else netloc_host
+    pinned = urlunparse((p.scheme, netloc, p.path or "/", p.params, p.query, ""))
+    hdrs = dict(headers or {})
+    hdrs["Host"] = host if not p.port else f"{host}:{p.port}"
+    session = requests.Session()
+    session.mount("https://", _SniAdapter(host))
+    return session.request(method, pinned, timeout=timeout, headers=hdrs, data=data,
+                           stream=stream, allow_redirects=False)
 
 # resemble-enhance defaults (overridable per job): nfe = diffusion steps, lambd = denoise strength,
 # tau = prior temperature, solver = ODE solver. The package's documented inference knobs.
@@ -255,7 +305,7 @@ def handler(job):
     work = tempfile.mkdtemp(prefix="enh-")
     src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
     try:
-        with requests.get(audio_url, stream=True, timeout=DOWNLOAD_TIMEOUT, allow_redirects=False) as r:
+        with _pinned_https("GET", audio_url, timeout=DOWNLOAD_TIMEOUT, stream=True) as r:
             r.raise_for_status()
             with open(src, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
@@ -267,8 +317,9 @@ def handler(job):
         if not size:
             return {"ok": False, "error": "enhance produced no output"}
         with open(dst, "rb") as f:
-            put = requests.put(output_url, data=f, timeout=UPLOAD_TIMEOUT, allow_redirects=False,
-                               headers={"content-type": "audio/wav", "content-length": str(size)})
+            put = _pinned_https(
+                "PUT", output_url, timeout=UPLOAD_TIMEOUT, data=f,
+                headers={"content-type": "audio/wav", "content-length": str(size)})
         put.raise_for_status()
         return {"ok": True, "output_key": output_key, "bytes": size, "sr": sr,
                 "applied": ["speech-upscale:resemble-enhance"]}
