@@ -24,10 +24,13 @@ Returns: { ok, output_key, bytes, sr, applied: ["speech-upscale:resemble-enhance
          `applied` tag is set ONLY on success. The orchestrator/router owns any soft-degrade policy.
 """
 
+import ipaddress
 import os
 import shutil
+import socket
 import subprocess
 import tempfile
+from urllib.parse import urlparse
 
 import boto3
 import requests
@@ -39,6 +42,41 @@ import torchaudio
 # them there at build (see Dockerfile), so enhance()/denoise() never fetch at runtime.
 DOWNLOAD_TIMEOUT = 900
 UPLOAD_TIMEOUT = 900
+
+# Optional pin for presigned hosts (e.g. ".r2.cloudflarestorage.com"). Empty = skip host-suffix check.
+R2_URL_HOST_SUFFIX = os.environ.get("R2_URL_HOST_SUFFIX", "").strip().lower()
+
+
+def _url_error(url, what):
+    """Refuse non-https / private / link-local / loopback / optional non-R2 host. Returns err str or None.
+
+    Presigned mode otherwise lets any job submitter drive GET/PUT from the GPU worker (SSRF). Resolve
+    the hostname and reject blocked address classes; callers must also pass allow_redirects=False so a
+    public host cannot bounce into a private one via Location."""
+    try:
+        p = urlparse(str(url or ""))
+    except Exception:  # noqa: BLE001 -- malformed URL is a job error, not a crash
+        return f"{what}: malformed URL"
+    if p.scheme != "https" or not p.hostname:
+        return f"{what}: URL must be https with a hostname"
+    host = p.hostname.lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return f"{what}: URL host is blocked"
+    if R2_URL_HOST_SUFFIX:
+        suffix = R2_URL_HOST_SUFFIX if R2_URL_HOST_SUFFIX.startswith(".") else f".{R2_URL_HOST_SUFFIX}"
+        bare = suffix.lstrip(".")
+        if host != bare and not host.endswith(suffix):
+            return f"{what}: URL host must end with {R2_URL_HOST_SUFFIX}"
+    try:
+        infos = socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)
+    except socket.gaierror:
+        return f"{what}: URL host does not resolve"
+    for _fam, _type, _proto, _canon, sockaddr in infos:
+        ip = ipaddress.ip_address(sockaddr[0])
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast or ip.is_unspecified):
+            return f"{what}: URL resolves to a blocked address"
+    return None
 
 # resemble-enhance defaults (overridable per job): nfe = diffusion steps, lambd = denoise strength,
 # tau = prior temperature, solver = ODE solver. The package's documented inference knobs.
@@ -210,10 +248,14 @@ def handler(job):
     output_key = inp.get("output_key", "")
     if not audio_url or not output_url:
         return {"ok": False, "error": "input needs presigned audio_url + output_url"}
+    for u, name in ((audio_url, "audio_url"), (output_url, "output_url")):
+        err = _url_error(u, name)
+        if err:
+            return {"ok": False, "error": err}
     work = tempfile.mkdtemp(prefix="enh-")
     src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
     try:
-        with requests.get(audio_url, stream=True, timeout=DOWNLOAD_TIMEOUT) as r:
+        with requests.get(audio_url, stream=True, timeout=DOWNLOAD_TIMEOUT, allow_redirects=False) as r:
             r.raise_for_status()
             with open(src, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
@@ -225,7 +267,7 @@ def handler(job):
         if not size:
             return {"ok": False, "error": "enhance produced no output"}
         with open(dst, "rb") as f:
-            put = requests.put(output_url, data=f, timeout=UPLOAD_TIMEOUT,
+            put = requests.put(output_url, data=f, timeout=UPLOAD_TIMEOUT, allow_redirects=False,
                                headers={"content-type": "audio/wav", "content-length": str(size)})
         put.raise_for_status()
         return {"ok": True, "output_key": output_key, "bytes": size, "sr": sr,
