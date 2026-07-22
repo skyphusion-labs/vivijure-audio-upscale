@@ -1,5 +1,7 @@
 # vivijure-audio-upscale
 
+[![Runpod](https://api.runpod.io/badge/skyphusion-labs/vivijure-audio-upscale)](https://console.runpod.io/hub/skyphusion-labs/vivijure-audio-upscale)
+
 **Cleans up spoken dialogue so voices sound clear and full.** This is the audio cleanup finish engine
 for [Vivijure](https://github.com/skyphusion-labs/vivijure), the AI film studio. It runs on a GPU
 (RunPod), takes a dialogue track, and hands back a cleaner, fuller version. Under the hood it is
