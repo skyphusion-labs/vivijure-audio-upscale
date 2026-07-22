@@ -56,9 +56,15 @@ def test_scoped_accepts_matching_project():
         "renders/neon/dialogue/s.wav", "audio_key", project="neon") is None
 
 
-def test_scoped_accepts_audio_staging_with_project():
+def test_scoped_rejects_flat_audio_prefix():
+    err = handler._scoped_key_error(
+        "audio/uuid.wav", "audio_key", project="neon")
+    assert err and "must be under audio/neon/" in err
+
+
+def test_scoped_accepts_project_scoped_audio_prefix():
     assert handler._scoped_key_error(
-        "audio/uuid.wav", "audio_key", project="neon") is None
+        "audio/neon/uuid.wav", "audio_key", project="neon") is None
 
 
 def test_upscale_r2_refuses_cross_project_before_io(monkeypatch):
