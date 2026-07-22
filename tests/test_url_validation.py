@@ -17,7 +17,39 @@ def _stub(name, **attrs):
 _stub("torch", cuda=types.SimpleNamespace(is_available=lambda: False), __version__="0-stub")
 _stub("torchaudio")
 _stub("boto3", client=lambda *a, **k: None)
-_stub("requests")
+
+class _HTTPAdapter:
+    def __init__(self, *a, **k):
+        pass
+
+    def init_poolmanager(self, *a, **k):
+        return None
+
+
+class _Session:
+    def __init__(self):
+        self.last = None
+
+    def mount(self, prefix, adapter):
+        pass
+
+    def request(self, method, url, **k):
+        self.last = (method, url, k)
+        return types.SimpleNamespace(
+            status_code=200,
+            raise_for_status=lambda: None,
+            iter_content=lambda n: [b"x"],
+            __enter__=lambda self: self,
+            __exit__=lambda *a: None,
+        )
+
+
+_adapters = types.ModuleType("requests.adapters")
+_adapters.HTTPAdapter = _HTTPAdapter
+sys.modules["requests.adapters"] = _adapters
+_requests = _stub("requests", Session=_Session)
+_requests.adapters = _adapters
+
 _runpod = _stub("runpod")
 _runpod.serverless = types.SimpleNamespace(start=lambda *a, **k: None)
 
@@ -46,14 +78,27 @@ def test_url_error_accepts_public_https(monkeypatch):
     assert handler._url_error("https://bucket.example/obj", "audio_url") is None
 
 
+def test_pinned_https_connects_to_resolved_ip(monkeypatch):
+    monkeypatch.setattr(socket, "getaddrinfo", _public_addrinfo)
+    sess = _Session()
+    # raising=False: sibling modules may have stubbed requests without Session first.
+    monkeypatch.setattr(handler.requests, "Session", lambda: sess, raising=False)
+    handler._pinned_https("GET", "https://bucket.example/obj", timeout=1, stream=True)
+    method, url, k = sess.last
+    assert method == "GET"
+    assert url.startswith("https://8.8.8.8/")
+    assert k["headers"]["Host"] == "bucket.example"
+    assert k["allow_redirects"] is False
+
+
 def test_presigned_rejects_bad_url_before_io(monkeypatch):
-    called = {"get": 0}
+    called = {"pin": 0}
 
     def boom(*a, **k):
-        called["get"] += 1
-        raise AssertionError("requests.get must not run for rejected URLs")
+        called["pin"] += 1
+        raise AssertionError("_pinned_https must not run for rejected URLs")
 
-    monkeypatch.setattr(handler.requests, "get", boom, raising=False)
+    monkeypatch.setattr(handler, "_pinned_https", boom)
     out = handler.handler({
         "input": {
             "audio_url": "http://169.254.169.254/latest",
@@ -61,4 +106,4 @@ def test_presigned_rejects_bad_url_before_io(monkeypatch):
         },
     })
     assert out["ok"] is False and "error" in out
-    assert called["get"] == 0
+    assert called["pin"] == 0
