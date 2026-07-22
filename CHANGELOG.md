@@ -4,6 +4,11 @@ The image ships as a git-tag-driven release (`v<X.Y.Z>`; CI publishes GHCR on ta
 builds the consumer image. This file records the why behind each release; the tag is the version of
 record. Newest first.
 
+## Unreleased
+
+- **docs(hub):** add `.runpod/hub.json` + `tests.json`, Hub badge, `THIRD_PARTY_MODELS.md`, and
+  Hub R2 env notes (`R2_ENDPOINT_URL`) for RunPod Hub publish (audio-upscale#62).
+
 ## v1.0.4
 
 - **fix(build): patch resemble-enhance fsolve for NumPy 2.x (PR #55).** Build-time patch
