@@ -18,3 +18,5 @@ Model weights cloned from Hugging Face at Docker build reflect the operator's ch
 | 2026-07-23 | K3 repo | code-coverage workflow token scopes | Standard org CI pattern; fork PRs capped by `if` guard |
 | 2026-07-23 | K3 repo | Unpinned pip deepspeed/resemble-enhance | GPU image rebuild under operator control |
 | 2026-07-23 | K3 repo | Error strings echo presigned URLs | **Harden separately** if not already redacted in handler |
+| 2026-07-23 | K3 verify ~18:04 | R2 tenancy self-asserted via job project | RunPod operator API boundary; keys scoped by harness/keys.py |
+| 2026-07-23 | K3 verify ~18:04 | Runtime exception text in job response | Operator GPU worker; errors redacted where feasible |
