@@ -6,8 +6,50 @@ record. Newest first.
 
 ## Unreleased
 
-- **docs(hub):** add `.runpod/hub.json` + `tests.json`, Hub badge, `THIRD_PARTY_MODELS.md`, and
-  Hub R2 env notes (`R2_ENDPOINT_URL`) for RunPod Hub publish (audio-upscale#62).
+- Nothing yet.
+
+## v1.0.8
+
+- **fix(hub): align the Hub listing GPU pools and disk with the production endpoint (#77).** The
+  listing advertised `BLACKWELL_180,HOPPER_141` and explicitly negated the three RTX PRO 6000 cards
+  by name. Those cards ARE the `BLACKWELL_96` pool, which is the pool production endpoint
+  `sj0btgpjdtswa7` actually runs this worker on, so the listing excluded the one configuration we
+  prove daily and left a Hub deployer on B200 or H200 class hardware at roughly two to three times
+  the hourly cost for the same job. `gpuIds` is now `BLACKWELL_96,HOPPER_141,BLACKWELL_180`
+  (production pool first, larger pools kept as availability fallbacks; no unproven pool added), and
+  `tests.json` runs the Hub smoke on `NVIDIA RTX PRO 6000 Blackwell Server Edition`, the card
+  production runs on.
+- **fix(hub): raise `containerDiskInGb` from 20 to 40.** The image is 12.3 GB COMPRESSED, so a 20 GB
+  container disk cannot hold it uncompressed; production uses 40. As listed, a Hub deploy could fail
+  on a demo-facing page. `.runpod/README.md` records the provenance and the repin rule.
+- **Docs and listing metadata only.** The tag still bakes a consumer image (`build-image.yml` fires
+  on `v*.*.*` tags), and `:1.0.8` is functionally identical to `:1.0.7`. Production stays pinned to
+  `:1.0.7` on purpose; **no repin**.
+
+## v1.0.7
+
+- **fix(security): project-scoped R2 + SSRF DNS pin, baked (#68, #70, #71, #72) with the CI bake fix
+  (#73).** Same handler content the failed v1.0.6 intended: project scope on `audio/<project>/`,
+  presigned URL SSRF gate with DNS-pinned HTTPS, allowlist sync hardened, plus newline-safe docker
+  meta tags so the bake completes. **This is the prod pin:** `:1.0.7`.
+  (Backfilled 2026-07-25 from the v1.0.7 GitHub release; the row was missing from this file.)
+
+## v1.0.6
+
+- **Bake FAILED; do not pin `:1.0.6`.** The `build-image` run died before push (newline-separated
+  docker meta tags broke bash, fixed in #73). The tag and GitHub release exist, the image does not.
+  Use v1.0.7, which carries the same security content.
+  (Backfilled 2026-07-25 from the v1.0.6 GitHub release; the row was missing from this file.)
+
+## v1.0.5
+
+- **docs(hub): RunPod Hub publish surface (audio-upscale#62).** `.runpod/hub.json` + `tests.json`
+  (`{"selftest": true}`), `.runpod/README.md` with the R2 env names (`R2_ENDPOINT_URL`),
+  `THIRD_PARTY_MODELS.md`, and the Hub badge. Docs-only patch cut so Hub, which indexes releases and
+  not commits, could index a release tree containing `.runpod/`. No handler or image-recipe change;
+  runtime remained the v1.0.4 NumPy/fsolve fix.
+  (Backfilled 2026-07-25: this entry sat under Unreleased, but `git tag --contains` puts the commit
+  in v1.0.5 through v1.0.7, so it shipped in v1.0.5.)
 
 ## v1.0.4
 
