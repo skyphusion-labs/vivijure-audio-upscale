@@ -12,28 +12,21 @@ cleaned audio and thin / auto-generated TTS (Aura-1) comes out full and natural.
 score beds bypass it and take the CPU `audio-mix` path (ffmpeg DSP), cost-aware routing -- GPU only
 when there is speech.
 
-This repo is the image + the RunPod handler; the studio-side audio-finish module worker (a thin CF
-Worker behind the typed hook in `vivijure`) is what calls this endpoint. Image:
-`ghcr.io/skyphusion-labs/vivijure-audio-upscale`. **No version tag is cut yet:** the image test-builds
-clean and the model loads + `enhance()` runs on CPU, but the full GPU `{"selftest": true}` harness is
-endpoint-gated (a deliberate, spend-gated step once the RunPod endpoint is pinned).
+This repo is the image + the RunPod handler; the studio-side audio-finish module worker (thin module on
+`vivijure-cf` / `vivijure-local`, types from `vivijure-core`) is what calls this endpoint. Image:
+`ghcr.io/skyphusion-labs/vivijure-audio-upscale`. Pin by versioned tag from git tags / GHCR; do not
+freeze a single version here as current forever. GPU `{"selftest": true}` is spend-gated on a real
+endpoint / SecurePod before prod pin.
 
-## The Vivijure constellation (the same map is in each repo)
+## The Vivijure constellation
 
 ```
-   friends + Slate (Discord)
+   vivijure-cf / vivijure-local  (panels; core: vivijure-core)
             |
             v
-        slate  -->  vivijure (studio control plane / JSON API)
-                        |
-                        v
-                  vivijure-backend (GPU render: keyframes -> i2v -> assemble)
-                        |
-            +-----------+-------------+-------------------+
-            |           |             |                   |
-   vivijure-musetalk  vivijure-   vivijure-audio-   vivijure-local-backend
-   (lipsync module)   upscale     upscale           (self-host render path)
-                                  ^-- THIS REPO
+   vivijure-backend + finish satellites
+            |
+     musetalk | upscale | audio-upscale (THIS) | wan-train | local-12/16gb
 ```
 
 ## Handler contract (the job, `handler.py`)
@@ -73,12 +66,11 @@ python -m py_compile handler.py
 ```
 
 **Release / deploy mechanics.** `.github/workflows/build-image.yml` builds + pushes to GHCR on a push to
-`main` (touching the build inputs) as a `sha-<short>` smoke image only (there is no `:latest`); a pushed SemVer tag (first
-cut: `v0.1.0`, 2026-07-02) ALSO publishes the pinnable release image tagged `<version>` + `<major>.<minor>` + `sha-<short>`. PUBLIC repo, so CI runs on GitHub-hosted `ubuntu-latest`. The RunPod
-endpoint's image tag, **GPU type, and R2 env are dashboard / endpoint-config knobs** (RunPod's API
-does not honor them); **container-registry-auth IS now MCP/API-manageable** (RunPod MCP
-`create-container-registry-auth` + attach via `containerRegistryAuthId` on create/update-template, no
-dashboard step).
+`main` (touching the build inputs) as a `sha-<short>` smoke image only (no `:latest` contract); a
+pushed SemVer tag ALSO publishes the pinnable release image tagged `<version>` + `<major>.<minor>` +
+`sha-<short>`. PUBLIC repo; CI on GitHub-hosted `ubuntu-latest`. Operator sets endpoint image tag,
+GPU type, and R2 env (**never freeze endpoint IDs here**). Registry-auth is MCP/API-manageable
+(`containerRegistryAuthId` on template).
 
 ## Architecture
 
@@ -96,8 +88,8 @@ dashboard step).
 ## Verifying changes
 
 After any handler or Dockerfile change: build clean (the model-load on CPU is a build-time fail-fast),
-then once the endpoint is pinned run `{"selftest": true}` on a real GPU and confirm `ok:true` with a
-non-zero `output_bytes` before cutting a release tag.
+then **SecurePod** `{"selftest": true}` on a real GPU and confirm `ok:true` with a non-zero
+`output_bytes` before cutting a release tag / repinning prod. Verify the **artifact**, not only CI.
 
 ## Conventions
 
@@ -117,7 +109,8 @@ non-zero `output_bytes` before cutting a release tag.
   Commits and PRs land under the member's `skyphusion-<member>` identity, never Conrad's.
 - Operating memory for the vivijure family lives in the per-project memory under
   `~/.claude/projects/-home-conrad-dev-vivijure/memory/` (`seg-vivijure-modules`); load it before acting.
-- **HARD AUP line:** the CSAM bright line is absolute (see the vivijure project memory). Non-negotiable.
+- **HARD AUP line:** the CSAM bright line is absolute. Non-negotiable.
+- **Ignore Cursor `AGENTS.md`.** No endpoint-ID freezes.
 
 ## Commits & versioning
 
