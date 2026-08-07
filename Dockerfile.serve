@@ -1,0 +1,10 @@
+# Serve overlay for homelab LOCAL_FINISH_* speech-upscale (RunPod-compatible /run + /status).
+# Mirrors vivijure-upscale's Dockerfile.serve pattern (fc#1592 lane B): same base image the
+# serverless worker already ships, just swap the entrypoint for a resident HTTP server so the
+# resemble-enhance model loads once and stays warm instead of paying cold start per job.
+ARG AUDIO_UPSCALE_IMAGE=ghcr.io/skyphusion-labs/vivijure-audio-upscale:1.0.7
+FROM ${AUDIO_UPSCALE_IMAGE}
+
+COPY handler.py runpod_http_serve.py serve.py /app/
+WORKDIR /app
+CMD ["python", "serve.py"]
