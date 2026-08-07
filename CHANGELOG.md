@@ -6,7 +6,42 @@ record. Newest first.
 
 ## Unreleased
 
-- Nothing yet.
+- **fix(serve): forward `selftest` to the wrapped handler instead of intercepting it
+  (fc#1592 lane B review, vivijure-upscale#88).** The overlay's `POST /run` originally
+  answered `{"selftest": true}` with a liveness-only shortcut, copied verbatim from
+  `vivijure-upscale`. `handler.py`'s own docstring calls that key the deploy-verification
+  GPU check; answering it before reaching the handler made the documented check
+  structurally incapable of failing. Now forwarded like any other job (submit -> poll
+  `/status/<id>`), so it genuinely loads the model and runs a real enhance. `/health`
+  remains the fast auth-free liveness probe -- unchanged. Re-verified on a fresh SecurePod:
+  `ok: true`, real `gpu` field, `output_bytes: 88278` matching the serverless control;
+  residency re-confirmed through the real HTTP path (model-download log line appears once
+  across two sequential selftest jobs).
+- **feat(serve): add the `Dockerfile.serve` overlay for resident homelab deployment (fc#1592
+  lane B, fc#1488).** Mirrors `vivijure-upscale`'s proven pattern: `serve.py` +
+  `runpod_http_serve.py` (copied verbatim from `vivijure-upscale`, the more hardened of the two
+  siblings -- it carries a `MAX_HTTP_BODY_BYTES` cap `vivijure-musetalk`'s copy does not yet have)
+  layer a RunPod-compatible `/run` + `/status` HTTP server on top of the existing serverless
+  image, so the resemble-enhance model can stay resident on our own GPU boxes instead of paying
+  serverless cold start per job. `Dockerfile.serve` pins the base to the actual production tag
+  `:1.0.7` (not `:1.0.8`, which the v1.0.8 entry above says is docs-only and deliberately not
+  repinned).
+- **fix(handler): guard `runpod.serverless.start()` behind `if __name__ == "__main__":` (fc#1592
+  lane B).** It was a bare module-level call, unlike the identical line in `vivijure-upscale` and
+  `vivijure-musetalk`'s handler.py, both of which already guard it. Importing `handler` from
+  `serve.py` (`from handler import handler`) ran the serverless worker's own local-dev loop at
+  import time, which found no `test_input.json` and exited before `serve.py`'s own HTTP server
+  ever started -- the serve overlay could not run at all without this fix. No behavior change for
+  the existing serverless CMD path (`python handler.py` already runs as `__main__`).
+- **Measured on an on-demand RunPod SecurePod (RTX PRO 6000 Blackwell, 2026-08-07):** model
+  residency proven via `resemble_enhance.enhancer.inference.load_enhancer`'s own
+  `functools.cache` -- 1 cache miss (one real weight load) across 5 sequential enhance/denoise
+  calls in one long-lived process, 7 subsequent cache hits, `nvidia-smi` memory.used flat at
+  3117 MiB across calls 2-4. `torch.cuda.max_memory_allocated()` peak 2132.9 MiB. Fits alongside
+  `vivijure-upscale`'s measured ~5933 MiB (fc#1488) with headroom on the 20475 MiB target card.
+  The unmodified serverless `{"selftest": true}` path was re-verified on a separate serverless
+  endpoint the same session (`ok: true`, `output_bytes: 88278`, matching fc#1488 exactly) as the
+  control that this change did not touch the shipped path.
 
 ## v1.0.8
 
