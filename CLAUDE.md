@@ -85,6 +85,44 @@ GPU type, and R2 env (**never freeze endpoint IDs here**). Registry-auth is MCP/
   -- the older torch-2.1.1/cu121 build crash-looped ("no kernel image for the device") on that swap.
 - **No `TORCH_CUDA_ARCH_LIST`.** Nothing compiles from source here; torch kernels come from the base.
 
+## Homelab serve overlay (the resident LOCAL_FINISH door)
+
+`Dockerfile.serve` + `serve.py` + `runpod_http_serve.py` layer a RunPod-compatible `/run` +
+`/status` HTTP server on the SAME base image the serverless worker ships, so the door runs
+resident on our own GPU boxes instead of paying a serverless cold start per job. This is the
+overlay `serve.py` points at for the measured proof.
+
+- **Published, not hand-built.** `build-image.yml` publishes `<version>-serve`,
+  `<major>.<minor>-serve` and `sha-<short>-serve` alongside every release tag, from the same job,
+  with the base pinned to the release image that job just built. Evidence about a door has to be
+  evidence about a SHA; a locally-built tag cannot be re-pulled, re-verified or rolled back by
+  anyone else (fc#1592, vivijure-upscale#89 item 1).
+- **`AUDIO_UPSCALE_IMAGE` has no default** and a hand build must pass it. A literal default is a
+  hand copy of something the artifact already knows, so it drifts one release at a time, and its
+  failure mode is a door that WORKS on a stale base. Docker refuses an empty `FROM` at parse
+  time, before any pull. The `InvalidDefaultArgInFrom` build warning is the intended shape, not a
+  defect to "fix" back into a default.
+- **Port 8013** by default (`PORT`); `vivijure-upscale`'s video door is 8012, so both can be
+  resident on one card without a collision. Bind the published port to the VLAN address, never
+  `0.0.0.0`.
+- **Env it needs** (values never in a tracked file): `LOCAL_FINISH_TOKEN` -- the STUDIO's token,
+  never a per-box random one -- plus `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT_URL`,
+  `R2_BUCKET`. `R2_ENDPOINT_URL` is per box: a box with no local MinIO points at its own edge.
+- **`/health` is auth-free liveness only.** It answers 200 without touching the GPU, the model or
+  the handler, so it can never fail for a reason a job would fail for. The deploy check that CAN
+  fail is `POST /run {"selftest": true}`, which this overlay FORWARDS to the handler rather than
+  intercepting -- it loads the model and runs a real enhance. Use `/health` as the control that
+  the door is reachable, and the selftest as the measurement.
+- **Residency is the library's, not ours.** resemble-enhance's `load_enhancer()`
+  (`enhancer/inference.py`) is `functools.cache`-decorated on `(run_dir, device)` and `handler.py`
+  always calls it with `run_dir=None` and a constant per-process device, so a long-lived process
+  loads the checkpoint once. Nothing here implements its own cache.
+- **Measured 2026-08-07 on a RunPod SecurePod (RTX PRO 6000 Blackwell):** 1 cache miss and 7 hits
+  across sequential calls in one process, `nvidia-smi` memory.used flat at **3117 MiB**,
+  `torch.cuda.max_memory_allocated()` peak 2132.9 MiB, real 264678-byte 44.1 kHz WAV out. That is
+  a measurement of THAT card on THAT date; re-measure on the target box rather than carrying it
+  forward as a current fact.
+
 ## Verifying changes
 
 After any handler or Dockerfile change: build clean (the model-load on CPU is a build-time fail-fast),
