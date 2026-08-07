@@ -2,7 +2,20 @@
 # Mirrors vivijure-upscale's Dockerfile.serve pattern (fc#1592 lane B): same base image the
 # serverless worker already ships, just swap the entrypoint for a resident HTTP server so the
 # resemble-enhance model loads once and stays warm instead of paying cold start per job.
-ARG AUDIO_UPSCALE_IMAGE=ghcr.io/skyphusion-labs/vivijure-audio-upscale:1.0.7
+#
+# AUDIO_UPSCALE_IMAGE HAS NO DEFAULT ON PURPOSE (fc#1592, vivijure-upscale#89 item 2). A literal
+# default is a hand copy of something the artifact already knows, so it drifts one release at a
+# time and its failure mode is a door that WORKS while running a stale base -- the failure nobody
+# investigates. Docker refuses an empty FROM at parse time, before any pull, so a forgotten arg
+# fails loudly and instantly instead of silently building the wrong thing.
+#
+# build-image.yml passes the release tag it JUST built from this same commit, so the published
+# `<version>-serve` image and its base always come from one source tree. A hand build must pass
+# the arg explicitly:
+#   docker build -f Dockerfile.serve \
+#     --build-arg AUDIO_UPSCALE_IMAGE=ghcr.io/skyphusion-labs/vivijure-audio-upscale:<version> \
+#     -t vivijure-audio-upscale-serve:dev .
+ARG AUDIO_UPSCALE_IMAGE
 FROM ${AUDIO_UPSCALE_IMAGE}
 
 COPY handler.py runpod_http_serve.py serve.py /app/

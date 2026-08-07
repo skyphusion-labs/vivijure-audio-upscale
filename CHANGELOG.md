@@ -4,7 +4,43 @@ The image ships as a git-tag-driven release (`v<X.Y.Z>`; CI publishes GHCR on ta
 builds the consumer image. This file records the why behind each release; the tag is the version of
 record. Newest first.
 
-## Unreleased
+## v1.1.0
+
+- **ci(serve): publish the `*-serve` overlay to GHCR on every release tag (fc#1592,
+  vivijure-upscale#89 item 1).** Nothing built a serve image and nothing would have: GHCR
+  carried 28 tags for this package and **zero** `*-serve` tags (measured with a positive
+  control -- the same query returns `1.0.8`, so the zero is a real absence and not a blind
+  one). Every resident door on the fleet therefore ran a HAND-BUILT local tag, which our own
+  standing rule forbids: evidence has to be about a SHA, and a locally-built tag cannot be
+  re-pulled, re-verified or rolled back by anyone else. `build-image.yml` now builds and pushes
+  `<version>-serve`, `<major>.<minor>-serve` and `sha-<short>-serve` from the SAME job as the
+  release image, gated identically (a bare merge to main smoke-builds and does not publish).
+  Same job because the overlay's `FROM` is the release image, so the ordering is not optional
+  and the base is already in the local daemon -- one thin layer instead of a second tens-of-GB
+  pull, and the published overlay and its base always come from one source tree. The step
+  carries two controls (the resolved base must be one of the tags this job built, whole-line
+  matched, and it must already exist LOCALLY so docker cannot silently pull a same-named stale
+  tag) and prints `derived N serve tags of M release tags` with a floor, so a zero is a harness
+  failure rather than a silent pass.
+- **fix(serve): `AUDIO_UPSCALE_IMAGE` no longer carries a default (fc#1592,
+  vivijure-upscale#89 item 2).** It pinned the literal `:1.0.7`, which is a hand copy of
+  something the artifact already knows: it drifts one release at a time and its failure mode is
+  a door that WORKS on a stale base, which is the failure nobody investigates. CI now passes the
+  tag it just built; a hand build must pass the arg. Proved with a control pair on real docker:
+  no arg -> `rc=1`, `base name (${AUDIO_UPSCALE_IMAGE}) should not be blank`, refused at parse
+  before any pull; `--build-arg AUDIO_UPSCALE_IMAGE=busybox:latest` -> `rc=0`, so the refusal is
+  the missing arg and not a malformed Dockerfile. The resulting `InvalidDefaultArgInFrom` build
+  warning is the intended shape and is documented as such in `CLAUDE.md` so nobody "fixes" it
+  back into a default.
+- **docs: `CLAUDE.md` gains a homelab serve-overlay section.** `serve.py`'s own docstring said
+  "See CLAUDE.md for the measured proof" and `CLAUDE.md` carried no serve, residency or homelab
+  content whatsoever -- a pointer at a document that did not hold the thing. It now records the
+  published tag shape, the required build arg, port 8013 (8012 is the video door, so both can be
+  resident on one card), the env the door needs, why `/health` is a control and the forwarded
+  selftest is the measurement, and the dated residency measurement with an explicit instruction
+  to re-measure rather than carry it forward.
+- Carries the previously-unreleased serve overlay work below, which had merged to `main` with no
+  release tag and therefore no published artifact of any kind.
 
 - **fix(serve): forward `selftest` to the wrapped handler instead of intercepting it
   (fc#1592 lane B review, vivijure-upscale#88).** The overlay's `POST /run` originally
