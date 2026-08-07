@@ -88,8 +88,34 @@ GPU type, and R2 env (**never freeze endpoint IDs here**). Registry-auth is MCP/
 ## Verifying changes
 
 After any handler or Dockerfile change: build clean (the model-load on CPU is a build-time fail-fast),
-then **SecurePod** `{"selftest": true}` on a real GPU and confirm `ok:true` with a non-zero
-`output_bytes` before cutting a release tag / repinning prod. Verify the **artifact**, not only CI.
+then run the **pre-prod GPU gate** below and confirm `ok:true` with a non-zero `output_bytes` before
+cutting a release tag / repinning prod. Verify the **artifact**, not only CI.
+
+## Pre-prod GPU test spend (Conrad, 2026-08-06) -- do not thrift here
+
+**Never hold back RunPod spend when proving an image before it is production-pinned.** A green bake is
+not a proven enhance. Pre-prod verification is **expected spend**, not an escalation. Community pods
+are not the gate.
+
+Pick **one** of these for the gate (either is fine; pick what fits the change):
+
+| Path | How | When |
+| --- | --- | --- |
+| **SecurePod** | Spin a SecurePod (or equivalent dedicated pod) on the candidate image; run `{"selftest": true}` (and a real short job if needed); verify the **artifact** (`ok:true`, non-zero `output_bytes`). | Prefer for isolated image proof without touching prod traffic. |
+| **Serverless endpoint** | Deploy/pin the candidate image on the audio-upscale serverless endpoint, set **active workers (min idle / `workersMin`) to 1** so cold-start does not fake a hang or a false timeout, run the same selftest / short job, verify the artifact. | Prefer when the proof needs the real endpoint shape (env, network, R2). |
+
+### HARD: restore workers after serverless test
+
+If you raised the serverless endpoint's active / min workers **above 0** for testing, **bring it
+back to 0 when the test is done** (same session, before you walk away). Leaving `workersMin` /
+active workers at 1+ burns idle GPU money with no proof benefit. Max workers can stay at the
+prod pin; the restore rule is about the **floor that keeps a warm worker** (min/active = 0 in
+steady state unless Conrad ruled otherwise for prod capacity).
+
+Do **not** skip the restore because "we might test again tomorrow." Re-raise to 1 at the next
+test if needed. Document the before/after values in the PR or runlog when you change them.
+
+Never trust: CI green alone or bake green alone.
 
 ## Conventions
 
@@ -107,6 +133,8 @@ then **SecurePod** `{"selftest": true}` on a real GPU and confirm `ok:true` with
 - The FIRST command in any op is the member's own login shell: `sudo -u <member> bash -lc '<ops>'`
   (loads their `$HOME`, their `~/dev/vivijure-audio-upscale` clone, their gh / RunPod / R2 creds).
   Commits and PRs land under the member's `skyphusion-<member>` identity, never Conrad's.
+- **Pre-prod GPU proof spend is authorized** (SecurePod or serverless workersMin=1). Do not thrift
+  out of the proof. **Serverless min/active workers back to 0 when the test ends.**
 - Operating memory for the vivijure family lives in the per-project memory under
   `~/.claude/projects/-home-conrad-dev-vivijure/memory/` (`seg-vivijure-modules`); load it before acting.
 - **HARD AUP line:** the CSAM bright line is absolute. Non-negotiable.
@@ -117,3 +145,9 @@ then **SecurePod** `{"selftest": true}` on a real GPU and confirm `ok:true` with
 Conventional Commits (`feat(scope):`, `fix(scope):`, `docs:`); body explains the why. SemVer-style
 `0.MINOR.PATCH` while pre-1.0 (PATCH for fixes / backend tweaks, MINOR for features). A release is a
 pushed `vMAJOR.MINOR.PATCH` git tag (CI publishes the matching immutable image tag the endpoint pins to).
+
+## Release / deploy
+
+**Tag-gated production deploy.** Merges to `main` run CI only; they do not ship production.
+Cut an annotated SemVer tag on `main` to release (`git tag -a vX.Y.Z -m "..." && git push origin vX.Y.Z`).
+Deploy workflows assert the tag commit is an ancestor of `origin/main`.
