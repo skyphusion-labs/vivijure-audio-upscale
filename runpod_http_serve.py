@@ -184,8 +184,12 @@ def route(
         if err:
             return err
         payload = (body or {}).get("input", body or {})
-        if (body or {}).get("selftest") or payload.get("selftest"):
-            return 200, {"ok": True, "selftest": True, "service": service}
+        # fc#1592 lane B / vivijure-upscale#88: selftest is FORWARDED to the wrapped handler
+        # like any other job, never intercepted here. The handler's own {"selftest": true}
+        # path is the documented deploy-verification GPU check (loads the model, runs a real
+        # enhance); answering it at this layer without reaching the handler would make that
+        # check structurally incapable of failing (ok:true on a box with no GPU, a broken
+        # model, or a missing weight). /health remains the fast auth-free liveness probe.
         job_id = registry.submit(payload)
         return 200, {"id": job_id}
 

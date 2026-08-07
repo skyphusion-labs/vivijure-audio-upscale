@@ -6,6 +6,17 @@ record. Newest first.
 
 ## Unreleased
 
+- **fix(serve): forward `selftest` to the wrapped handler instead of intercepting it
+  (fc#1592 lane B review, vivijure-upscale#88).** The overlay's `POST /run` originally
+  answered `{"selftest": true}` with a liveness-only shortcut, copied verbatim from
+  `vivijure-upscale`. `handler.py`'s own docstring calls that key the deploy-verification
+  GPU check; answering it before reaching the handler made the documented check
+  structurally incapable of failing. Now forwarded like any other job (submit -> poll
+  `/status/<id>`), so it genuinely loads the model and runs a real enhance. `/health`
+  remains the fast auth-free liveness probe -- unchanged. Re-verified on a fresh SecurePod:
+  `ok: true`, real `gpu` field, `output_bytes: 88278` matching the serverless control;
+  residency re-confirmed through the real HTTP path (model-download log line appears once
+  across two sequential selftest jobs).
 - **feat(serve): add the `Dockerfile.serve` overlay for resident homelab deployment (fc#1592
   lane B, fc#1488).** Mirrors `vivijure-upscale`'s proven pattern: `serve.py` +
   `runpod_http_serve.py` (copied verbatim from `vivijure-upscale`, the more hardened of the two
