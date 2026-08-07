@@ -137,21 +137,55 @@ def _device():
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _release_cuda_cache():
+    """Return torch's cached-but-unreferenced VRAM to the driver.
+
+    Follows `vivijure-upscale`'s handler.py, which calls `torch.cuda.empty_cache()` after its GPU
+    phase for the same reason. **Model weights are ALLOCATED, not cached, so they survive** -- the
+    resident model this serve overlay exists to keep warm is unaffected, and only the job's
+    scratch blocks are handed back.
+
+    Why it matters here (measured on an RTX 4000 SFF Ada, 20475 MiB, 2026-08-07, fc#1592): without
+    it, the resident door's footprint is a HIGH-WATER MARK OF THE LARGEST JOB IT HAS EVER SERVED
+    and only ever rises. Two boxes running this identical image but different job histories sat at
+    **1930 MiB** (1s selftests only) and **12390 MiB** (one 30s clip) -- and the second number
+    never came back down. That is not a ceiling anyone can plan against.
+
+    The consequence is not confined to this process. A card co-tenanted with the video upscale door
+    leaves its NVENC encoder -- a SEPARATE CUDA context that cannot use torch's reserved pool --
+    only what this process is not holding, and `vivijure-upscale`'s own handler comments record
+    `CreateInputBuffer failed: out of memory` as exactly what happens then.
+    """
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def _enhance_file(src, dst, *, denoise_first=False, **knobs):
     """Load src (any torchaudio-readable audio), run resemble-enhance, write dst as 44.1k wav.
     Returns the output sample rate. Heavy import is deferred so the module stays import-light."""
     from resemble_enhance.enhancer.inference import denoise, enhance  # deferred
 
-    dwav, sr = torchaudio.load(src)
-    dwav = dwav.mean(dim=0)  # mix to mono 1-D, what resemble-enhance expects
-    device = _device()
-    if denoise_first:
-        dwav, sr = denoise(dwav, sr, device)
-    k = {**DEFAULTS, **{n: knobs[n] for n in DEFAULTS if knobs.get(n) is not None}}
-    wav, out_sr = enhance(dwav, sr, device, nfe=int(k["nfe"]), solver=str(k["solver"]),
-                          lambd=float(k["lambd"]), tau=float(k["tau"]))
-    torchaudio.save(dst, wav.unsqueeze(0).cpu(), out_sr)
-    return out_sr
+    dwav = wav = None
+    try:
+        dwav, sr = torchaudio.load(src)
+        dwav = dwav.mean(dim=0)  # mix to mono 1-D, what resemble-enhance expects
+        device = _device()
+        if denoise_first:
+            dwav, sr = denoise(dwav, sr, device)
+        k = {**DEFAULTS, **{n: knobs[n] for n in DEFAULTS if knobs.get(n) is not None}}
+        wav, out_sr = enhance(dwav, sr, device, nfe=int(k["nfe"]), solver=str(k["solver"]),
+                              lambd=float(k["lambd"]), tau=float(k["tau"]))
+        torchaudio.save(dst, wav.unsqueeze(0).cpu(), out_sr)
+        return out_sr
+    finally:
+        # Drop OUR references BEFORE releasing: empty_cache() only returns blocks nothing still
+        # holds, so calling it while this job's tensors are alive frees almost nothing. The output
+        # has already been copied to CPU by the .cpu() above, so nothing here is still needed.
+        # `finally`, not a trailing line: a raising enhance would otherwise keep the entire job's
+        # cache for the life of the process, which is the exact defect being fixed, surviving on
+        # the error path.
+        dwav = wav = None
+        _release_cuda_cache()
 
 
 def _selftest(inp):
