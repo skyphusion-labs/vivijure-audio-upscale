@@ -4,6 +4,40 @@ The image ships as a git-tag-driven release (`v<X.Y.Z>`; CI publishes GHCR on ta
 builds the consumer image. This file records the why behind each release; the tag is the version of
 record. Newest first.
 
+## v1.1.1
+
+- **fix(gpu): release torch's cached VRAM after every enhance (fc#1592).** Follows
+  `vivijure-upscale`'s handler, which calls `torch.cuda.empty_cache()` after its GPU phase for the
+  same reason. **Model weights are ALLOCATED, not cached, so residency survives** -- the warm model
+  this serve overlay exists to keep is unaffected; only the job's scratch blocks go back.
+  **Measured, which is why this is a fix and not a tidy-up** (RTX 4000 SFF Ada, 20475 MiB,
+  2026-08-07): without it a resident door's footprint is a **high-water mark of the largest job it
+  has ever served, and it only rises**. Two boxes running this identical image but different job
+  histories sat at **1930 MiB** (1s selftests only) and **12390 MiB** (one 30s clip), and the
+  second never came back down. That is not a ceiling anyone can plan against. The consequence
+  reaches past this process: on a card co-tenanted with the video upscale door, that door's NVENC
+  encoder is a SEPARATE CUDA context which cannot use torch's reserved pool, and
+  `vivijure-upscale`'s own handler records `CreateInputBuffer failed: out of memory` as exactly
+  what happens then. Concurrent peak with both doors working measured **18797 of 20475 MiB**.
+- **Placed at the single choke point, and in a `finally`.** `_enhance_file` is the one function
+  every mode goes through (R2, presigned and selftest all call it), so one release covers all three
+  rather than three call sites that drift apart. It is in a `finally` rather than on a trailing
+  line because an exception would otherwise keep the whole job's cache for the life of the resident
+  process -- the exact defect being fixed, surviving on the error path. References are dropped
+  first, since `empty_cache()` only returns blocks nothing still holds.
+- **test: the GPU path had no behavioural coverage at all** -- this repo carried no torch stubs and
+  its only handler test was an AST parse. `tests/test_cuda_cache_release.py` (stub pattern taken
+  from `vivijure-upscale`'s proven one) covers release on success, release **on the raise path**,
+  the ORDER (release after the output is written, since presence alone cannot tell that from a
+  release before it), the no-CUDA guard, and a positive control proving the recorder can observe a
+  MISSING release -- without which every other assertion in the file would be vacuous.
+- **Mutation-tested, checked for the right red.** Deleting the call reddens three tests by name;
+  **the naive implementation -- a trailing line instead of a `finally` -- reddens ONLY the raise
+  test**, which is what proves the `finally` is load-bearing rather than decorative; dropping the
+  `is_available()` guard reddens the no-CUDA test. Restoring returns 19/19 green. The harness
+  refused to run at all on its first attempt because its scratch baseline was red (an incomplete
+  copy), which is the guard working: mutation results against a red baseline are uninterpretable.
+
 ## v1.1.0
 
 - **ci(serve): publish the `*-serve` overlay to GHCR on every release tag (fc#1592,
