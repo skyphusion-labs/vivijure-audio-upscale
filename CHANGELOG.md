@@ -4,6 +4,41 @@ The image ships as a git-tag-driven release (`v<X.Y.Z>`; CI publishes GHCR on ta
 builds the consumer image. This file records the why behind each release; the tag is the version of
 record. Newest first.
 
+## v1.1.3 -- 2026-08-15
+
+- **fix(build): purge the OS-managed `cryptography` so pip owns exactly one copy (#103, fc#754).**
+  The image build died intermittently on `error: uninstall-no-record-file` / `Cannot uninstall
+  cryptography 41.0.7`. It is not intermittent. Ubuntu 24.04's `python3-cryptography` owns ELEVEN
+  metadata paths in the base, BOTH `cryptography-41.0.7.dist-info` (no RECORD) and
+  `cryptography.egg-info`, and `runpod` requires `cryptography>=50.0.0`, so pip must replace 41.0.7
+  on every build. importlib picks whichever metadata dir the filesystem hands it first: on the
+  RECORD-less `.dist-info` pip 25.2 raises and the build dies; on `.egg-info` pip logs *"Can't
+  uninstall ... No files were found to uninstall"* and CONTINUES, installing 50.0.0 into
+  `/usr/local/lib/python3.12/dist-packages` while 41.0.7 stays in `/usr/lib/python3/dist-packages`.
+  **So the coin flip was never build-fails versus build-fine, it was build-fails LOUDLY versus
+  build-ships-two-copies QUIETLY** -- and the published v1.1.2 is the quiet one: measured 2
+  cryptography package trees and 3 metadata entries on
+  `ghcr.io/skyphusion-labs/vivijure-audio-upscale:1.1.2-serve`, 50.0.0 winning on sys.path order
+  alone with a 2023 crypto library still resident behind it. Every green build of this image has
+  shipped that state.
+- **fix(build): assert the shipped state, so a regression fails the build instead of GHCR (#103).**
+  A guard after the pip layer requires exactly one cryptography package tree, exactly one metadata
+  entry, and a RECORD on it. It asserts the ARTIFACT rather than the install's exit status, because
+  exit 0 is precisely what the two-copy failure looks like. Its positive control runs first and in
+  the same command: if the finder cannot see pip's own metadata, a cryptography count of zero is
+  blindness rather than absence. `--ignore-installed` and `--force-reinstall` were both rejected --
+  they convert the loud case into the quiet one, which is the defect with its alarm switched off,
+  and it is why `vivijure-musetalk#52` reverted `--ignore-installed` six minutes after merging it.
+- **docs(ci): the "host prep protects this build" comment was stale by three weeks (#103).**
+  `build-image.yml` said plain `docker build` was used because buildx would bypass
+  `prep-runpod-base-for-pip-builds.sh`. True while the job ran on `[self-hosted, gpu]`; `f83375ad`
+  moved it to `ubuntu-latest` on 2026-07-22 and left the comment. That script is a
+  `/usr/local/sbin` file on the Plane C bake hosts and does not exist on a GitHub-hosted runner, so
+  the comment has been crediting a control that never ran here -- a stale exemption, which is worse
+  than a stale fact because it tells the reader the footgun is handled. The build method is
+  unchanged and still correct; only the reason is now true (the serve overlay's `FROM` needs the
+  release tag present in the local daemon).
+
 ## v1.1.2 -- 2026-08-14
 
 - **feat(serve): a log line per job accept and per terminal transition (cf#507).** For six days a

@@ -129,9 +129,19 @@ jobs:
             type=sha,format=short
 
       - name: Build image
-        # Plain docker build (not build-push-action/buildx): host prep rewrites the LOCAL
-        # runpod/pytorch tag; buildx re-resolves the registry digest and bypasses prep
-        # (fc#754 cryptography footgun). Matches vivijure-musetalk build-image.yml.
+        # Plain docker build, not buildx/build-push-action -- but NOT for the reason this comment
+        # used to give, which was stale and credited a control that does not run here. It said host
+        # prep rewrites the local runpod/pytorch tag and buildx bypasses it (fc#754). That was true
+        # while this job ran on [self-hosted, gpu]; f83375ad moved it to ubuntu-latest on
+        # 2026-07-22 and did not touch this comment. prep-runpod-base-for-pip-builds.sh is a
+        # /usr/local/sbin script on the Plane C bake hosts and DOES NOT EXIST on a GitHub-hosted
+        # runner, so for three weeks this comment told the reader the cryptography footgun was
+        # handled while nothing here handled it. It is handled in the Dockerfile now (#103), by
+        # purging the OS-managed copy and asserting the shipped state.
+        #
+        # The real reason to stay on plain docker build is the SERVE OVERLAY below: its FROM is the
+        # tag this step just built, and its CONTROL 2 requires that tag to be in the local daemon
+        # rather than re-resolved from the registry.
         # meta.outputs.tags is newline-separated -- must not expand inline in `for t in …`.
         env:
           META_TAGS: ${{ steps.meta.outputs.tags }}
