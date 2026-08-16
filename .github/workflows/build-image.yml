@@ -40,13 +40,15 @@ name: build-image
 # zero `*-serve` tags, so every resident door on the fleet ran a hand-built local tag that
 # nobody else could re-pull, re-verify or roll back (fc#1592, vivijure-upscale#89 item 1).
 #
-# Runner: GitHub-hosted ubuntu-latest. This repo is PUBLIC, so per the standing runner
-# policy (public repos -> GitHub-hosted, fork-safe; private/internal -> the org fleet
-# pool) the build runs in the hosted sandbox, NOT on the self-hosted fleet. The CUDA
-# base (runpod/pytorch cu1281) is a tens-of-GB build; ubuntu-latest ships with only
-# ~14GB free, so the "Free disk space" step below reclaims ~25-30GB of preinstalled
-# toolchains this image never uses (the same pattern proven in vivijure-backend). Without
-# it the docker build blows the runner disk.
+# Runner: Plane C `[self-hosted, bake-capable]` (org runner group vivijure-gpu-builds,
+# id 9; allow-public ON, fc#754). This is a PUBLIC repo, so Plane B fleet runners stay
+# off the table (a fork PR could run untrusted code on a fleet box). Plane C is the
+# dedicated image-bake lane, NOT a fleet box and NOT the retired enterprise
+# `vivijure-bake*` / hosted-heavy runners. Access is gated by the runner-group
+# allowlist plus tag / workflow_dispatch only; a fork PR cannot create a v* tag, so
+# untrusted code never reaches it. The CUDA base (runpod/pytorch cu1281) is a
+# tens-of-GB build; Plane C has TB-class disk. The hosted disk-reclaim step stays
+# behind `if: runner.environment == 'github-hosted'` so it is a no-op here.
 
 on:
   workflow_dispatch:
@@ -76,8 +78,9 @@ jobs:
     # fc#1628: this guard lived on the removed sync-gpu-allowlist job, which was the
     # only thing stopping a non-tag push from baking. It moves here rather than vanishing.
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    # Public repo -> GitHub-hosted (fork-safe). Self-hosted GPU runners are for private repos only.
-    runs-on: ubuntu-latest
+    # Plane C bake-capable (vivijure-gpu-builds, allow-public ON). Not the retired
+    # vivijure-bake* hosted-heavy lane. Lightweight CI stays on ubuntu-latest.
+    runs-on: [self-hosted, bake-capable]
     timeout-minutes: 240
     env:
       IMAGE: ghcr.io/skyphusion-labs/vivijure-audio-upscale
@@ -133,11 +136,13 @@ jobs:
         # used to give, which was stale and credited a control that does not run here. It said host
         # prep rewrites the local runpod/pytorch tag and buildx bypasses it (fc#754). That was true
         # while this job ran on [self-hosted, gpu]; f83375ad moved it to ubuntu-latest on
-        # 2026-07-22 and did not touch this comment. prep-runpod-base-for-pip-builds.sh is a
-        # /usr/local/sbin script on the Plane C bake hosts and DOES NOT EXIST on a GitHub-hosted
-        # runner, so for three weeks this comment told the reader the cryptography footgun was
-        # handled while nothing here handled it. It is handled in the Dockerfile now (#103), by
-        # purging the OS-managed copy and asserting the shipped state.
+        # 2026-07-22 and did not touch this comment. The bake is back on Plane C
+        # `[self-hosted, bake-capable]` (disk lane, allow-public; not the retired
+        # vivijure-bake* hosted-heavy runners). prep-runpod-base-for-pip-builds.sh exists
+        # on those hosts again, but it is NOT the cryptography control: that lives in
+        # the Dockerfile now (#103), by purging the OS-managed copy and asserting the
+        # shipped state. The earlier three-week gap was the hosted-runner era; do not
+        # re-credit the host script.
         #
         # The real reason to stay on plain docker build is the SERVE OVERLAY below: its FROM is the
         # tag this step just built, and its CONTROL 2 requires that tag to be in the local daemon
