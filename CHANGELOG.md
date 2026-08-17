@@ -4,6 +4,16 @@ The image ships as a git-tag-driven release (`v<X.Y.Z>`; CI publishes GHCR on ta
 builds the consumer image. This file records the why behind each release; the tag is the version of
 record. Newest first.
 
+## Unreleased
+
+- **fix(serve): an oversize or unparseable POST /run is no longer accepted as an empty job (#99).**
+  `_body()` answered `None` for no body, a body past the 1 MiB cap, and a body that would not
+  parse, and `/run` then did `(body or {}).get("input", body or {})`, so all three were accepted
+  with `200` and a job id. The caller got a success shape for a request that was never honoured,
+  and the job failed later naming a missing field rather than the body. Now `413` and `400`
+  respectively, checked AFTER authentication so an unauthenticated caller still gets `401` and
+  learns nothing about the cap. Ported from vivijure-blender.
+
 ## v1.1.3 -- 2026-08-15
 
 - **fix(build): purge the OS-managed `cryptography` so pip owns exactly one copy (#103, fc#754).**
