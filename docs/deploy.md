@@ -73,6 +73,19 @@ means and why.
   Why: a small warm window avoids a cold start if a second shot arrives right away.
 - **`EXECUTION_TIMEOUT_MS`** (default `600000`) -- the longest a single job may run, in milliseconds
   (600000 = 10 minutes). Why: a stuck job is cut off instead of billing forever.
+- **`MAX_INVOCATION_SECONDS`** (default `540`) -- the wall-clock ceiling for ONE job, in seconds,
+  enforced inside the handler. Why: without it a stalled download or a hung enhance runs until
+  something else kills it, and the only thing left to do that is the studio 90-minute phase
+  ceiling, which fails the WHOLE render rather than this one polish step. When the ceiling is
+  hit the job returns `{ok:false, error}` naming the guard, so the studio can degrade this
+  step and keep the original dialogue. Example: `MAX_INVOCATION_SECONDS=540`.
+
+  **Keep it below `EXECUTION_TIMEOUT_MS`** (600s by default). Above it, RunPod kills the worker
+  first, and a platform kill has no structured output.
+
+  What it covers: the R2 or presigned DOWNLOAD, enhance, encode, and upload, plus the selftest
+  ffmpeg child. What it does NOT cover, deliberately: queue wait and cold start, which happen
+  before the worker is handed the job.
 - **`CONTAINER_REGISTRY_AUTH_ID`** (default empty) -- a RunPod credential id for a **private** image.
   Why: if your image is private, RunPod needs a login to pull it. Make one in the RunPod console
   (Settings, then Container Registry Auth) and paste its id here. Leave blank for a public image.
