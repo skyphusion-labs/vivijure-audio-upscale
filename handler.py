@@ -30,6 +30,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import time
 from urllib.parse import urlparse, urlunparse
 
 import boto3
@@ -43,8 +44,64 @@ import torchaudio
 DOWNLOAD_TIMEOUT = 900
 UPLOAD_TIMEOUT = 900
 
+# Per-invocation wall-clock guard (core#223 sibling of musetalk#98). 540s sits 60s under the
+# 600s RunPod EXECUTION_TIMEOUT_MS default so this handler can return {ok:false, error} before
+# a platform kill. Env-overridable; the name matches the future max_invocation_seconds field
+# so a declaration must relay the value this process is RUNNING with, not this literal.
+MAX_INVOCATION_SECONDS = int(os.environ.get("MAX_INVOCATION_SECONDS", "540") or "540")
+if MAX_INVOCATION_SECONDS <= 0:
+    # A non-positive budget is spent before the first check, so every job would fail
+    # immediately and the door would quietly stop enhancing. Refuse at import.
+    raise ValueError("MAX_INVOCATION_SECONDS must be a positive number of seconds")
+
 # Optional pin for presigned hosts (e.g. ".r2.cloudflarestorage.com"). Empty = skip host-suffix check.
 R2_URL_HOST_SUFFIX = os.environ.get("R2_URL_HOST_SUFFIX", "").strip().lower()
+
+
+class SoftDegrade(Exception):
+    """Invocation budget spent. Doors catch this and return the existing {ok:false, error}
+    envelope so the job ends as structured data, never as a hang until the platform kill."""
+
+
+class _Deadline:
+    """ONE wall-clock budget for ONE invocation. Expiry raises SoftDegrade; both job modes
+    already return {ok:false, error} for any Exception, so the studio sees a structured miss
+    (speech-upscale is a polish step) instead of an unbounded worker."""
+
+    def __init__(self, seconds=None):
+        self.seconds = MAX_INVOCATION_SECONDS if seconds is None else int(seconds)
+        self.started = time.monotonic()
+
+    def elapsed(self):
+        return time.monotonic() - self.started
+
+    def remaining(self):
+        return self.seconds - self.elapsed()
+
+    def reason(self, stage):
+        return (f"invocation exceeded MAX_INVOCATION_SECONDS={self.seconds}s "
+                f"at {stage} after {self.elapsed():.1f}s")
+
+    def check(self, stage):
+        if self.remaining() <= 0:
+            raise SoftDegrade(self.reason(stage))
+
+    def subprocess_timeout(self):
+        return max(0.1, self.remaining())
+
+    def http_timeout(self, cap):
+        return max(1.0, min(float(cap), self.remaining()))
+
+
+def _run_guarded(cmd, deadline, stage, **kw):
+    """The only subprocess entry on the compute path. Spends remaining budget as the child
+    timeout and converts expiry to SoftDegrade."""
+    dl = deadline or _Deadline()
+    dl.check(stage)
+    try:
+        return subprocess.run(cmd, timeout=dl.subprocess_timeout(), **kw)
+    except subprocess.TimeoutExpired:
+        raise SoftDegrade(dl.reason(stage)) from None
 
 
 def _ip_blocked(ip):
@@ -160,21 +217,25 @@ def _release_cuda_cache():
         torch.cuda.empty_cache()
 
 
-def _enhance_file(src, dst, *, denoise_first=False, **knobs):
+def _enhance_file(src, dst, *, denoise_first=False, deadline=None, **knobs):
     """Load src (any torchaudio-readable audio), run resemble-enhance, write dst as 44.1k wav.
     Returns the output sample rate. Heavy import is deferred so the module stays import-light."""
     from resemble_enhance.enhancer.inference import denoise, enhance  # deferred
 
+    dl = deadline or _Deadline()
     dwav = wav = None
     try:
+        dl.check("enhance")
         dwav, sr = torchaudio.load(src)
         dwav = dwav.mean(dim=0)  # mix to mono 1-D, what resemble-enhance expects
         device = _device()
         if denoise_first:
             dwav, sr = denoise(dwav, sr, device)
+            dl.check("enhance")
         k = {**DEFAULTS, **{n: knobs[n] for n in DEFAULTS if knobs.get(n) is not None}}
         wav, out_sr = enhance(dwav, sr, device, nfe=int(k["nfe"]), solver=str(k["solver"]),
                               lambd=float(k["lambd"]), tau=float(k["tau"]))
+        dl.check("encode")
         torchaudio.save(dst, wav.unsqueeze(0).cpu(), out_sr)
         return out_sr
     finally:
@@ -195,27 +256,31 @@ def _selftest(inp):
            "cuda_available": torch.cuda.is_available()}
     work = tempfile.mkdtemp(prefix="selftest-")
     src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    dl = _Deadline()
     try:
         if torch.cuda.is_available():
             out["gpu"] = torch.cuda.get_device_name(0)
         # A 1s 16k mono tone + noise stands in for a thin TTS clip (we only prove the pipe runs).
-        gen = subprocess.run(
+        gen = _run_guarded(
             ["ffmpeg", "-v", "error", "-y", "-f", "lavfi",
              "-i", "sine=frequency=220:duration=1:sample_rate=16000",
              "-f", "lavfi", "-i", "anoisesrc=d=1:c=pink:r=16000:a=0.1",
              "-filter_complex", "[0:a][1:a]amix=inputs=2", "-ac", "1", "-ar", "16000", src],
-            capture_output=True, text=True)
+            dl, "ffmpeg-gen", capture_output=True, text=True)
         if gen.returncode != 0:
             out["error"] = f"ffmpeg gen failed: {(gen.stderr or '')[-500:]}"
             return out
         out["input_sr"] = 16000
-        out["sr"] = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")))
+        out["sr"] = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")), deadline=dl)
         if not os.path.exists(dst) or os.path.getsize(dst) == 0:
             out["error"] = "no output produced"
             return out
         out["output_bytes"] = os.path.getsize(dst)
         out["applied"] = ["speech-upscale:resemble-enhance"]
         out["ok"] = True
+        return out
+    except SoftDegrade as e:
+        out["error"] = str(e)[:800]
         return out
     except Exception as e:  # noqa: BLE001 -- a job error is data, returned to the caller
         out["error"] = str(e)[:800]
@@ -303,18 +368,26 @@ def _upscale_r2(inp):
         return {"ok": False, "error": "R2 mode needs R2_ENDPOINT_URL + R2_ACCESS_KEY_ID/SECRET in the endpoint env"}
     work = tempfile.mkdtemp(prefix="enh-")
     src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    # ONE budget per invocation, started before any I/O so the R2 fetch counts against it.
+    dl = _Deadline()
     try:
         s3 = _r2()
+        dl.check("download")
         s3.download_file(R2_BUCKET, audio_key, src)
+        dl.check("enhance")
         sr = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")),
+                           deadline=dl,
                            nfe=inp.get("nfe"), solver=inp.get("solver"),
                            lambd=inp.get("lambd"), tau=inp.get("tau"))
         if not os.path.getsize(dst):
             return {"ok": False, "error": "enhance produced no output"}
+        dl.check("upload")
         s3.upload_file(dst, R2_BUCKET, output_key, ExtraArgs={"ContentType": "audio/wav"})
         return {"ok": True, "output_key": output_key, "audio_key": output_key,
                 "bytes": os.path.getsize(dst), "sr": sr,
                 "applied": ["speech-upscale:resemble-enhance"]}
+    except SoftDegrade as e:
+        return {"ok": False, "error": str(e)[:500]}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)[:500]}
     finally:
@@ -338,25 +411,35 @@ def handler(job):
             return {"ok": False, "error": err}
     work = tempfile.mkdtemp(prefix="enh-")
     src, dst = os.path.join(work, "in.wav"), os.path.join(work, "out.wav")
+    # ONE budget per invocation, started before any I/O so the presigned fetch counts against it.
+    dl = _Deadline()
     try:
-        with _pinned_https("GET", audio_url, timeout=DOWNLOAD_TIMEOUT, stream=True) as r:
+        dl.check("download")
+        with _pinned_https("GET", audio_url, timeout=dl.http_timeout(DOWNLOAD_TIMEOUT),
+                           stream=True) as r:
             r.raise_for_status()
             with open(src, "wb") as f:
                 for chunk in r.iter_content(1 << 20):
+                    dl.check("download")
                     f.write(chunk)
+        dl.check("enhance")
         sr = _enhance_file(src, dst, denoise_first=bool(inp.get("denoise")),
+                           deadline=dl,
                            nfe=inp.get("nfe"), solver=inp.get("solver"),
                            lambd=inp.get("lambd"), tau=inp.get("tau"))
         size = os.path.getsize(dst)
         if not size:
             return {"ok": False, "error": "enhance produced no output"}
+        dl.check("upload")
         with open(dst, "rb") as f:
             put = _pinned_https(
-                "PUT", output_url, timeout=UPLOAD_TIMEOUT, data=f,
+                "PUT", output_url, timeout=dl.http_timeout(UPLOAD_TIMEOUT), data=f,
                 headers={"content-type": "audio/wav", "content-length": str(size)})
         put.raise_for_status()
         return {"ok": True, "output_key": output_key, "bytes": size, "sr": sr,
                 "applied": ["speech-upscale:resemble-enhance"]}
+    except SoftDegrade as e:
+        return {"ok": False, "error": str(e)[:500]}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": str(e)[:500]}
     finally:

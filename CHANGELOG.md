@@ -6,6 +6,20 @@ record. Newest first.
 
 ## Unreleased
 
+- **fix(speech): bound one invocation at 540s (core#223).** The compute path had no wall-clock
+  bound of any kind: the only `timeout=` in the handler was the HTTP read on the presigned
+  download, and the single `subprocess.run` (selftest ffmpeg) carried none. The studio phase
+  ceiling (`PHASE_HARD_DEADLINE_SECONDS`, 5400s) was the sole backstop, and that ceiling fails
+  the whole PHASE rather than one polish step, so a hung enhance took a correctly-running film
+  down with it. ONE budget is now established per invocation and checked around download,
+  enhance, encode, and upload; the ffmpeg child spends the remaining budget as its timeout.
+  On expiry the job returns the existing `{ok:false, error}` envelope (this door surfaces
+  failure; the orchestrator owns degrade), naming the guard and the elapsed seconds. It never
+  raises: an escaping exception would hang until the platform kill. Default 540s, env-overridable
+  via `MAX_INVOCATION_SECONDS` (refused at import if non-positive), 60s under the 600s reference
+  `EXECUTION_TIMEOUT_MS` so the structured miss wins the race. Handler + tests + docs only; no
+  GPU image tag.
+
 - **fix(serve): an oversize or unparseable POST /run is no longer accepted as an empty job (#99).**
   `_body()` answered `None` for no body, a body past the 1 MiB cap, and a body that would not
   parse, and `/run` then did `(body or {}).get("input", body or {})`, so all three were accepted
