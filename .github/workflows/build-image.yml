@@ -40,15 +40,18 @@ name: build-image
 # zero `*-serve` tags, so every resident door on the fleet ran a hand-built local tag that
 # nobody else could re-pull, re-verify or roll back (fc#1592, vivijure-upscale#89 item 1).
 #
-# Runner: Plane C `[self-hosted, bake-capable]` (org runner group vivijure-gpu-builds,
-# id 9; allow-public ON, fc#754). This is a PUBLIC repo, so Plane B fleet runners stay
-# off the table (a fork PR could run untrusted code on a fleet box). Plane C is the
-# dedicated image-bake lane, NOT a fleet box and NOT the retired enterprise
-# `vivijure-bake*` / hosted-heavy runners. Access is gated by the runner-group
-# allowlist plus tag / workflow_dispatch only; a fork PR cannot create a v* tag, so
-# untrusted code never reaches it. The CUDA base (runpod/pytorch cu1281) is a
-# tens-of-GB build; Plane C has TB-class disk. The hosted disk-reclaim step stays
-# behind `if: runner.environment == 'github-hosted'` so it is a no-op here.
+# Runner: GitHub-hosted `ubuntu-latest`. Plane C `[self-hosted, bake-capable]` (org runner
+# group vivijure-gpu-builds, id 9; allow-public ON, fc#754) is HISTORY: the fleet was
+# decommissioned 2026-09-24 on cost, that group has no members left, and a job still pinned
+# to the label does not fail, it QUEUES FOREVER and silently. Plane B fleet runners were
+# already off the table for this PUBLIC repo (a fork PR could have run untrusted code on a
+# fleet box) and are gone as well, as are the retired enterprise `vivijure-bake*` /
+# hosted-heavy runners. Access control is now the triggers alone: tag / workflow_dispatch
+# only, and a fork PR cannot create a v* tag, so untrusted code never reaches this job. The
+# CUDA base (runpod/pytorch cu1281) is a tens-of-GB build and a hosted runner has nothing
+# like the old TB-class bake disk, so the disk-reclaim step behind
+# `if: runner.environment == 'github-hosted'` is now LOAD-BEARING here instead of a no-op
+# (this image is ~12.3 GB compressed).
 
 on:
   workflow_dispatch:
@@ -78,9 +81,11 @@ jobs:
     # fc#1628: this guard lived on the removed sync-gpu-allowlist job, which was the
     # only thing stopping a non-tag push from baking. It moves here rather than vanishing.
     if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
-    # Plane C bake-capable (vivijure-gpu-builds, allow-public ON). Not the retired
-    # vivijure-bake* hosted-heavy lane. Lightweight CI stays on ubuntu-latest.
-    runs-on: [self-hosted, bake-capable]
+    # Plane C bake-capable (vivijure-gpu-builds) and the retired vivijure-bake* hosted-heavy
+    # lane are both gone; the fleet was decommissioned 2026-09-24 and a dead label queues
+    # instead of failing. Everything, heavy bake included, is on ubuntu-latest now, which has
+    # 19 prior successful bakes of this image.
+    runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
       IMAGE: ghcr.io/skyphusion-labs/vivijure-audio-upscale
@@ -99,7 +104,7 @@ jobs:
             exit 1
           fi
 
-      - name: Free disk space (hosted runners only; Plane C has TB-class disk)
+      - name: Free disk space (hosted runner; replaces the disk headroom Plane C had)
         if: runner.environment == 'github-hosted'
         run: |
           set -eu
@@ -136,13 +141,13 @@ jobs:
         # used to give, which was stale and credited a control that does not run here. It said host
         # prep rewrites the local runpod/pytorch tag and buildx bypasses it (fc#754). That was true
         # while this job ran on [self-hosted, gpu]; f83375ad moved it to ubuntu-latest on
-        # 2026-07-22 and did not touch this comment. The bake is back on Plane C
-        # `[self-hosted, bake-capable]` (disk lane, allow-public; not the retired
-        # vivijure-bake* hosted-heavy runners). prep-runpod-base-for-pip-builds.sh exists
-        # on those hosts again, but it is NOT the cryptography control: that lives in
-        # the Dockerfile now (#103), by purging the OS-managed copy and asserting the
-        # shipped state. The earlier three-week gap was the hosted-runner era; do not
-        # re-credit the host script.
+        # 2026-07-22 and did not touch this comment. The bake later returned to Plane C
+        # `[self-hosted, bake-capable]` and is now back on ubuntu-latest permanently: the
+        # fleet was decommissioned 2026-09-24, so NO host runs
+        # prep-runpod-base-for-pip-builds.sh any more. That script was never the
+        # cryptography control in any case: that lives in the Dockerfile now (#103), by
+        # purging the OS-managed copy and asserting the shipped state. Do not re-credit the
+        # host script.
         #
         # The real reason to stay on plain docker build is the SERVE OVERLAY below: its FROM is the
         # tag this step just built, and its CONTROL 2 requires that tag to be in the local daemon
